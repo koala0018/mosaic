@@ -118,9 +118,21 @@ function Invoke-ArchiveExtract($Archive, $Destination) {
 
 function Get-LadaReleaseFiles($Variant, $Version) {
   $githubBase = "https://github.com/ladaapp/lada/releases/download/$Version"
+  $ghProxyBase = "https://gh-proxy.com/$githubBase"
   if ($Variant -eq "intel") {
     return @{
       Options = @(
+        @{
+          Name = "gh-proxy.com accelerated single archive"
+          Files = @(
+            @{
+              Name = "lada-$($Version)_windows_intel.7z"
+              Size = 1312253117
+              Sha256 = "405d053f76e5f773b8b27bbaf921a44fdcf2c59c9fc91ed3f68f1a8daa3a8511"
+              Url = "$ghProxyBase/lada-$($Version)_windows_intel.7z"
+            }
+          )
+        },
         @{
           Name = "Pixeldrain single archive"
           Files = @(
@@ -149,6 +161,23 @@ function Get-LadaReleaseFiles($Variant, $Version) {
 
   return @{
     Options = @(
+      @{
+        Name = "gh-proxy.com accelerated split archive"
+        Files = @(
+          @{
+            Name = "lada-$($Version)_windows_nvidia.7z.001"
+            Size = 2096103424
+            Sha256 = "861caf4bc3fb08bb4f145a0ef53172d051d39401e9f5b1c6cbab7206b32e518b"
+            Url = "$ghProxyBase/lada-$($Version)_windows_nvidia.7z.001"
+          },
+          @{
+            Name = "lada-$($Version)_windows_nvidia.7z.002"
+            Size = 401197306
+            Sha256 = "472b8012f676cca0ef0eb6af9a69ba1256370dbe6c1c84740ab34d4c2650b796"
+            Url = "$ghProxyBase/lada-$($Version)_windows_nvidia.7z.002"
+          }
+        )
+      },
       @{
         Name = "Pixeldrain single archive"
         Files = @(

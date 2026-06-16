@@ -114,12 +114,15 @@ mosaic process input.mp4 --output-dir D:\Videos\Restored --quality fast --device
 
 NVIDIA 版本，推荐用于 NVIDIA 显卡：
 
+- 国内加速分卷 1：[lada-v0.11.0_windows_nvidia.7z.001](https://gh-proxy.com/https://github.com/ladaapp/lada/releases/download/v0.11.0/lada-v0.11.0_windows_nvidia.7z.001)
+- 国内加速分卷 2：[lada-v0.11.0_windows_nvidia.7z.002](https://gh-proxy.com/https://github.com/ladaapp/lada/releases/download/v0.11.0/lada-v0.11.0_windows_nvidia.7z.002)
 - Pixeldrain 单文件：[lada-v0.11.0_windows_nvidia.7z](https://pixeldrain.com/u/vWJKV7X5)
 - GitHub 分卷 1：[lada-v0.11.0_windows_nvidia.7z.001](https://github.com/ladaapp/lada/releases/download/v0.11.0/lada-v0.11.0_windows_nvidia.7z.001)
 - GitHub 分卷 2：[lada-v0.11.0_windows_nvidia.7z.002](https://github.com/ladaapp/lada/releases/download/v0.11.0/lada-v0.11.0_windows_nvidia.7z.002)
 
 Intel Arc 版本：
 
+- 国内加速单文件：[lada-v0.11.0_windows_intel.7z](https://gh-proxy.com/https://github.com/ladaapp/lada/releases/download/v0.11.0/lada-v0.11.0_windows_intel.7z)
 - Pixeldrain 单文件：[lada-v0.11.0_windows_intel.7z](https://pixeldrain.com/u/YAZgG4Pw)
 - GitHub 单文件：[lada-v0.11.0_windows_intel.7z](https://github.com/ladaapp/lada/releases/download/v0.11.0/lada-v0.11.0_windows_intel.7z)
 
@@ -159,6 +162,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -LadaVarian
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -LadaVariant nvidia
 ```
+
+自动下载会优先使用 `gh-proxy.com` 的 GitHub Release 加速链接。如果加速服务临时不可用，请手动下载上面的国内加速链接，然后使用 `-Offline` 构建。
 
 生成便携版：
 
