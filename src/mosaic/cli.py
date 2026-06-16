@@ -129,7 +129,7 @@ def _quality_preset(name: str) -> dict[str, str | int]:
         "best": {
             "encoding_preset": "h264-cpu-uhq",
             "max_clip_length": 240,
-            "detection_model": "v4",
+            "detection_model": "v4-accurate",
         },
     }
     return presets[name]

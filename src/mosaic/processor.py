@@ -6,7 +6,7 @@ import os
 import subprocess
 import sys
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
@@ -35,6 +35,7 @@ class RestorationProcess:
         self.on_done = on_done
         self._process: subprocess.Popen[bytes] | None = None
         self._thread: threading.Thread | None = None
+        self._recent_output: list[str] = []
         self._cancelled = False
 
     @property
@@ -65,38 +66,11 @@ class RestorationProcess:
         self.settings.temporary_directory.mkdir(parents=True, exist_ok=True)
 
         try:
-            command = build_lada_command(self.settings)
-            self.on_log("Starting Lada engine.")
-            self.on_log(" ".join(_quote_arg(arg) for arg in command))
-
-            startupinfo = None
-            creationflags = 0
-            if sys.platform == "win32":
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
-
-            env = os.environ.copy()
-            env.setdefault("PYTHONIOENCODING", "utf-8")
-            env.setdefault("PYTHONUTF8", "1")
-
-            self._process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                bufsize=1,
-                env=env,
-                startupinfo=startupinfo,
-                creationflags=creationflags,
-            )
-
-            assert self._process.stdout is not None
-            for line in self._process.stdout:
-                clean_line = decode_process_output(line).rstrip()
-                if clean_line:
-                    self.on_log(clean_line)
-
-            returncode = self._process.wait()
+            returncode = self._run_once(self.settings)
+            if returncode != 0 and _should_retry_on_cpu(self.settings, self._recent_output):
+                self.on_log("CUDA is not available or the NVIDIA driver is too old. Retrying on CPU...")
+                cpu_settings = replace(self.settings, device="cpu", fp16=False)
+                returncode = self._run_once(cpu_settings)
             if self._cancelled and returncode != 0:
                 self.on_log("Restoration was cancelled.")
             elif returncode == 0:
@@ -110,8 +84,57 @@ class RestorationProcess:
         finally:
             self._process = None
 
+    def _run_once(self, settings: LadaSettings) -> int:
+        self._recent_output: list[str] = []
+        command = build_lada_command(settings)
+        self.on_log("Starting Lada engine.")
+        self.on_log(" ".join(_quote_arg(arg) for arg in command))
+
+        startupinfo = None
+        creationflags = 0
+        if sys.platform == "win32":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+
+        env = os.environ.copy()
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        env.setdefault("PYTHONUTF8", "1")
+
+        self._process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
+            env=env,
+            startupinfo=startupinfo,
+            creationflags=creationflags,
+        )
+
+        assert self._process.stdout is not None
+        for line in self._process.stdout:
+            clean_line = decode_process_output(line).rstrip()
+            if clean_line:
+                self._recent_output.append(clean_line)
+                self._recent_output = self._recent_output[-80:]
+                self.on_log(clean_line)
+
+        return self._process.wait()
+
 
 def _quote_arg(value: str) -> str:
     if not value or any(ch.isspace() for ch in value):
         return f'"{value}"'
     return value
+
+
+def _should_retry_on_cpu(settings: LadaSettings, output_lines: list[str]) -> bool:
+    if settings.device == "cpu":
+        return False
+    text = "\n".join(output_lines).lower()
+    cuda_markers = (
+        "cuda initialization",
+        "driver on your system is too old",
+        "cuda is not available",
+    )
+    return any(marker in text for marker in cuda_markers)

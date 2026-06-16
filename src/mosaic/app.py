@@ -32,7 +32,7 @@ QUALITY_PRESETS = {
         "label": "Best",
         "encoding_preset": "h264-cpu-uhq",
         "max_clip_length": 240,
-        "detection_model": "v4",
+        "detection_model": "v4-accurate",
     },
 }
 
