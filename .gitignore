@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+.venv/
+venv/
+env/
+pip-wheel-metadata/
+*.egg-info/
+dist/
+build/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local media, model weights, and generated output
+data/
+inputs/
+outputs/
+models/
+weights/
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.webm
+*.pt
+*.pth
+*.onnx
+*.engine
+
+# Logs
+*.log
