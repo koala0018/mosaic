@@ -171,6 +171,18 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -LadaVarian
 dist/mosaic-portable-nvidia.zip
 ```
 
+也可以直接使用解压后的便携目录：
+
+```text
+dist/mosaic-portable/mosaic.exe
+```
+
+如果要安装到当前用户目录并创建桌面快捷方式：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-from-portable.ps1
+```
+
 生成可点击安装包：
 
 ```powershell
@@ -182,6 +194,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -Installer 
 ```text
 dist/mosaic-setup-nvidia.exe
 ```
+
+注意：Windows 自带 IExpress 对大文件安装包支持不好。NVIDIA 版内置 Lada 后体积约 2.5GB，IExpress 可能无法生成单个安装 exe。此时请使用 `dist/mosaic-portable-nvidia.zip` 分发，解压后运行 `mosaic.exe`，或者运行上面的 `install-from-portable.ps1` 安装到本机。
 
 如果目标电脑不是 NVIDIA 显卡，可以构建 Intel 版本：
 

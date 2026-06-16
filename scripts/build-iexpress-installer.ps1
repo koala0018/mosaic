@@ -6,6 +6,8 @@ param(
 
   [switch]$Offline,
 
+  [switch]$UseExistingPayload,
+
   [switch]$SkipLadaDownload
 )
 
@@ -16,9 +18,16 @@ $distRoot = Join-Path $projectRoot "dist"
 $setupPath = Join-Path $distRoot "mosaic-setup-$LadaVariant.exe"
 $sedPath = Join-Path $distRoot "mosaic-iexpress-$LadaVariant.sed"
 $payloadZip = Join-Path $distRoot "mosaic-portable.zip"
+$variantPayloadZip = Join-Path $distRoot "mosaic-portable-$LadaVariant.zip"
 $bootstrap = Join-Path $PSScriptRoot "setup-bootstrap.ps1"
 
-& (Join-Path $PSScriptRoot "build-portable.ps1") -LadaVariant $LadaVariant -LadaVersion $LadaVersion -Offline:$Offline -SkipLadaDownload:$SkipLadaDownload
+if ($UseExistingPayload) {
+  if (-not (Test-Path $payloadZip) -and (Test-Path $variantPayloadZip)) {
+    Copy-Item -Path $variantPayloadZip -Destination $payloadZip -Force
+  }
+} else {
+  & (Join-Path $PSScriptRoot "build-portable.ps1") -LadaVariant $LadaVariant -LadaVersion $LadaVersion -Offline:$Offline -SkipLadaDownload:$SkipLadaDownload
+}
 
 if (-not (Test-Path $payloadZip)) {
   throw "Missing payload zip: $payloadZip"
@@ -61,5 +70,9 @@ SourceFiles1=$PSScriptRoot
 "@ | Set-Content -Path $sedPath -Encoding ASCII
 
 iexpress.exe /N /Q $sedPath
+
+if (-not (Test-Path $setupPath)) {
+  throw "IExpress did not create $setupPath. The payload is likely too large for IExpress. Use dist\mosaic-portable-$LadaVariant.zip or build with Inno Setup/NSIS instead."
+}
 
 Write-Host "Installer: $setupPath"

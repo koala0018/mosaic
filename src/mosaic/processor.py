@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import threading
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import Callable
 
 from .lada_engine import LadaSettings, build_lada_command
+from .text_encoding import decode_process_output
 
 LogCallback = Callable[[str], None]
 DoneCallback = Callable[[int, Path], None]
@@ -31,7 +33,7 @@ class RestorationProcess:
         self.settings = settings
         self.on_log = on_log
         self.on_done = on_done
-        self._process: subprocess.Popen[str] | None = None
+        self._process: subprocess.Popen[bytes] | None = None
         self._thread: threading.Thread | None = None
         self._cancelled = False
 
@@ -74,21 +76,23 @@ class RestorationProcess:
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
 
+            env = os.environ.copy()
+            env.setdefault("PYTHONIOENCODING", "utf-8")
+            env.setdefault("PYTHONUTF8", "1")
+
             self._process = subprocess.Popen(
                 command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
                 bufsize=1,
+                env=env,
                 startupinfo=startupinfo,
                 creationflags=creationflags,
             )
 
             assert self._process.stdout is not None
             for line in self._process.stdout:
-                clean_line = line.rstrip()
+                clean_line = decode_process_output(line).rstrip()
                 if clean_line:
                     self.on_log(clean_line)
 

@@ -7,8 +7,12 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from .lada_engine import LadaSettings, default_output_path, find_lada_cli, run_lada_probe
-from .processor import RestorationProcess
+try:
+    from .lada_engine import LadaSettings, default_output_path, find_lada_cli, run_lada_probe
+    from .processor import RestorationProcess
+except ImportError:
+    from mosaic.lada_engine import LadaSettings, default_output_path, find_lada_cli, run_lada_probe
+    from mosaic.processor import RestorationProcess
 
 
 QUALITY_PRESETS = {

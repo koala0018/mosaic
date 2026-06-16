@@ -8,13 +8,15 @@ param(
 
   [switch]$Installer,
 
+  [switch]$UseExistingPayload,
+
   [switch]$SkipLadaDownload
 )
 
 $ErrorActionPreference = "Stop"
 
 if ($Installer) {
-  & (Join-Path $PSScriptRoot "build-iexpress-installer.ps1") -LadaVariant $LadaVariant -LadaVersion $LadaVersion -Offline:$Offline -SkipLadaDownload:$SkipLadaDownload
+  & (Join-Path $PSScriptRoot "build-iexpress-installer.ps1") -LadaVariant $LadaVariant -LadaVersion $LadaVersion -Offline:$Offline -UseExistingPayload:$UseExistingPayload -SkipLadaDownload:$SkipLadaDownload
 } else {
   & (Join-Path $PSScriptRoot "build-portable.ps1") -LadaVariant $LadaVariant -LadaVersion $LadaVersion -Offline:$Offline -SkipLadaDownload:$SkipLadaDownload
 }

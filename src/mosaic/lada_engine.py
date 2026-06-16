@@ -8,6 +8,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from .text_encoding import decode_process_output
+
 
 DEFAULT_OUTPUT_PATTERN = "{stem}.restored.mp4"
 
@@ -122,11 +124,19 @@ def run_lada_probe(lada_cli_path: Path | None, *args: str) -> subprocess.Complet
             "lada-cli was not found. Select lada-cli.exe, put it on PATH, or set LADA_CLI_PATH."
         )
 
-    return subprocess.run(
+    env = os.environ.copy()
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONUTF8", "1")
+
+    result = subprocess.run(
         [str(lada_cli), *args],
         check=False,
-        text=True,
         capture_output=True,
-        encoding="utf-8",
-        errors="replace",
+        env=env,
+    )
+    return subprocess.CompletedProcess(
+        args=result.args,
+        returncode=result.returncode,
+        stdout=decode_process_output(result.stdout or b""),
+        stderr=decode_process_output(result.stderr or b""),
     )

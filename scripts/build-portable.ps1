@@ -65,7 +65,18 @@ $zipPath = Join-Path $distRoot "mosaic-portable-$LadaVariant.zip"
 if (Test-Path $zipPath) {
   Remove-Item -LiteralPath $zipPath -Force
 }
-Compress-Archive -Path (Join-Path $bundleRoot "*") -DestinationPath $zipPath -Force
+
+$tar = Get-Command "tar.exe" -ErrorAction SilentlyContinue
+if ($tar) {
+  Write-Host "Creating portable zip with tar.exe"
+  & $tar.Source -a -cf $zipPath -C $bundleRoot .
+  if ($LASTEXITCODE -ne 0) {
+    throw "tar.exe failed to create portable zip with exit code $LASTEXITCODE."
+  }
+} else {
+  Write-Host "Creating portable zip with Compress-Archive"
+  Compress-Archive -Path (Join-Path $bundleRoot "*") -DestinationPath $zipPath -Force
+}
 
 $genericZipPath = Join-Path $distRoot "mosaic-portable.zip"
 Copy-Item -Path $zipPath -Destination $genericZipPath -Force
