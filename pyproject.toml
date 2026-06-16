@@ -16,6 +16,7 @@ dependencies = []
 
 [project.scripts]
 mosaic = "mosaic.cli:main"
+mosaic-app = "mosaic.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -28,6 +28,7 @@ Thumbs.db
 data/
 inputs/
 outputs/
+vendor/
 models/
 weights/
 *.mp4
