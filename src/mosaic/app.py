@@ -9,9 +9,21 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 try:
+    from .beauty_filter import (
+        BeautyFilterProcess,
+        BeautyFilterSettings,
+        check_beauty_dependencies,
+        default_beauty_output_path,
+    )
     from .lada_engine import LadaSettings, default_output_path, find_lada_cli, run_lada_probe
     from .processor import RestorationProcess
 except ImportError:
+    from mosaic.beauty_filter import (
+        BeautyFilterProcess,
+        BeautyFilterSettings,
+        check_beauty_dependencies,
+        default_beauty_output_path,
+    )
     from mosaic.lada_engine import LadaSettings, default_output_path, find_lada_cli, run_lada_probe
     from mosaic.processor import RestorationProcess
 
@@ -51,6 +63,7 @@ class MosaicApp(tk.Tk):
         self.input_var = tk.StringVar()
         self.output_dir_var = tk.StringVar()
         self.output_name_var = tk.StringVar()
+        self.process_mode_var = tk.StringVar(value="restore")
         self.lada_cli_var = tk.StringVar(value=str(find_lada_cli() or ""))
         self.device_var = tk.StringVar(value="auto")
         self.quality_var = tk.StringVar(value="balanced")
@@ -59,12 +72,17 @@ class MosaicApp(tk.Tk):
         self.detect_face_mosaics_var = tk.BooleanVar(value=False)
         self.fp16_var = tk.BooleanVar(value=False)
         self.fast_start_var = tk.BooleanVar(value=False)
+        self.beauty_strength_var = tk.IntVar(value=55)
+        self.beauty_preserve_audio_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="Select a video and Lada CLI to begin.")
         self.progress_var = tk.StringVar(value="")
         self.progress_value_var = tk.DoubleVar(value=0)
 
         self._log_queue: queue.Queue[tuple[str, object]] = queue.Queue()
-        self._process: RestorationProcess | None = None
+        self._process: RestorationProcess | BeautyFilterProcess | None = None
+        self._restore_widgets: list[tk.Widget] = []
+        self._beauty_widgets: list[tk.Widget] = []
+        self._widget_states: dict[str, str] = {}
 
         self._build_ui()
         self.after(120, self._drain_log_queue)
@@ -84,17 +102,42 @@ class MosaicApp(tk.Tk):
 
         self._path_row(file_frame, 0, "Video", self.input_var, self._choose_input)
         self._path_row(file_frame, 1, "Output folder", self.output_dir_var, self._choose_output_dir)
-        self._path_row(file_frame, 2, "Lada CLI", self.lada_cli_var, self._choose_lada_cli)
+        self._restore_widgets.extend(
+            self._path_row(file_frame, 2, "Lada CLI", self.lada_cli_var, self._choose_lada_cli)
+        )
 
-        ttk.Label(file_frame, text="Output name").grid(row=3, column=0, sticky="w", padx=(0, 10), pady=5)
-        ttk.Entry(file_frame, textvariable=self.output_name_var).grid(row=3, column=1, sticky="ew", pady=5)
+        ttk.Label(file_frame, text="Output name").grid(
+            row=3, column=0, sticky="w", padx=(0, 10), pady=5
+        )
+        ttk.Entry(file_frame, textvariable=self.output_name_var).grid(
+            row=3, column=1, sticky="ew", pady=5
+        )
+
+        ttk.Label(file_frame, text="Task").grid(row=4, column=0, sticky="w", padx=(0, 10), pady=5)
+        task_frame = ttk.Frame(file_frame)
+        task_frame.grid(row=4, column=1, columnspan=2, sticky="w", pady=5)
+        ttk.Radiobutton(
+            task_frame,
+            text="Restore mosaic",
+            value="restore",
+            variable=self.process_mode_var,
+            command=self._on_mode_changed,
+        ).grid(row=0, column=0, sticky="w", padx=(0, 16))
+        ttk.Radiobutton(
+            task_frame,
+            text="Beauty whitening",
+            value="beauty",
+            variable=self.process_mode_var,
+            command=self._on_mode_changed,
+        ).grid(row=0, column=1, sticky="w")
 
         options = ttk.LabelFrame(root, text="Processing", padding=12)
         options.grid(row=2, column=0, sticky="ew", pady=(0, 12))
         for column in range(6):
             options.columnconfigure(column, weight=1)
 
-        ttk.Label(options, text="Quality").grid(row=0, column=0, sticky="w")
+        quality_label = ttk.Label(options, text="Quality")
+        quality_label.grid(row=0, column=0, sticky="w")
         quality = ttk.Combobox(
             options,
             textvariable=self.quality_var,
@@ -104,55 +147,98 @@ class MosaicApp(tk.Tk):
         )
         quality.grid(row=1, column=0, sticky="ew", padx=(0, 10))
 
-        ttk.Label(options, text="Device").grid(row=0, column=1, sticky="w")
-        ttk.Combobox(
+        device_label = ttk.Label(options, text="Device")
+        device_label.grid(row=0, column=1, sticky="w")
+        device = ttk.Combobox(
             options,
             textvariable=self.device_var,
             values=("auto", "cuda", "xpu", "cpu"),
             width=12,
-        ).grid(row=1, column=1, sticky="ew", padx=(0, 10))
+        )
+        device.grid(row=1, column=1, sticky="ew", padx=(0, 10))
 
-        ttk.Checkbutton(options, text="Force FP16", variable=self.fp16_var).grid(
-            row=1, column=2, sticky="w", padx=(0, 10)
-        )
-        ttk.Checkbutton(options, text="MP4 fast start", variable=self.fast_start_var).grid(
-            row=1, column=3, sticky="w", padx=(0, 10)
-        )
-        ttk.Button(options, text="Check Lada", command=self._check_lada).grid(
-            row=1, column=4, sticky="ew", padx=(0, 10)
-        )
+        fp16 = ttk.Checkbutton(options, text="Force FP16", variable=self.fp16_var)
+        fp16.grid(row=1, column=2, sticky="w", padx=(0, 10))
+        fast_start = ttk.Checkbutton(options, text="MP4 fast start", variable=self.fast_start_var)
+        fast_start.grid(row=1, column=3, sticky="w", padx=(0, 10))
+        check_lada = ttk.Button(options, text="Check Lada", command=self._check_lada)
+        check_lada.grid(row=1, column=4, sticky="ew", padx=(0, 10))
         self.start_button = ttk.Button(options, text="Start", command=self._start)
         self.start_button.grid(row=1, column=5, sticky="ew")
 
-        ttk.Label(options, text="Detection").grid(row=2, column=0, sticky="w", pady=(10, 0))
-        ttk.Combobox(
+        detection_label = ttk.Label(options, text="Detection")
+        detection_label.grid(row=2, column=0, sticky="w", pady=(10, 0))
+        detection = ttk.Combobox(
             options,
             textvariable=self.detection_model_var,
             values=DETECTION_MODELS,
             state="readonly",
             width=14,
-        ).grid(row=3, column=0, sticky="ew", padx=(0, 10))
+        )
+        detection.grid(row=3, column=0, sticky="ew", padx=(0, 10))
 
-        ttk.Label(options, text="Restoration").grid(row=2, column=1, sticky="w", pady=(10, 0))
-        ttk.Combobox(
+        restoration_label = ttk.Label(options, text="Restoration")
+        restoration_label.grid(row=2, column=1, sticky="w", pady=(10, 0))
+        restoration = ttk.Combobox(
             options,
             textvariable=self.restoration_model_var,
             values=RESTORATION_MODELS,
             state="readonly",
             width=18,
-        ).grid(row=3, column=1, sticky="ew", padx=(0, 10))
+        )
+        restoration.grid(row=3, column=1, sticky="ew", padx=(0, 10))
 
-        ttk.Checkbutton(
+        detect_face = ttk.Checkbutton(
             options,
             text="Detect face mosaics",
             variable=self.detect_face_mosaics_var,
-        ).grid(row=3, column=2, columnspan=2, sticky="w", padx=(0, 10))
+        )
+        detect_face.grid(row=3, column=2, columnspan=2, sticky="w", padx=(0, 10))
+
+        self._restore_widgets.extend(
+            [
+                quality_label,
+                quality,
+                device_label,
+                device,
+                fp16,
+                fast_start,
+                check_lada,
+                detection_label,
+                detection,
+                restoration_label,
+                restoration,
+                detect_face,
+            ]
+        )
+
+        beauty_label = ttk.Label(options, text="Beauty intensity")
+        beauty_label.grid(row=4, column=0, sticky="w", pady=(12, 0))
+        beauty_strength = ttk.Scale(
+            options,
+            from_=10,
+            to=100,
+            orient=tk.HORIZONTAL,
+            variable=self.beauty_strength_var,
+        )
+        beauty_strength.grid(row=5, column=0, columnspan=2, sticky="ew", padx=(0, 10))
+        beauty_value = ttk.Label(options, textvariable=self.beauty_strength_var, width=4)
+        beauty_value.grid(row=5, column=2, sticky="w", padx=(0, 10))
+        preserve_audio = ttk.Checkbutton(
+            options,
+            text="Preserve original audio",
+            variable=self.beauty_preserve_audio_var,
+        )
+        preserve_audio.grid(row=5, column=3, columnspan=3, sticky="w", padx=(0, 10))
+        self._beauty_widgets.extend([beauty_label, beauty_strength, beauty_value, preserve_audio])
 
         controls = ttk.Frame(root)
         controls.grid(row=3, column=0, sticky="ew", pady=(0, 8))
         controls.columnconfigure(0, weight=1)
         ttk.Label(controls, textvariable=self.status_var).grid(row=0, column=0, sticky="w")
-        self.cancel_button = ttk.Button(controls, text="Cancel", command=self._cancel, state=tk.DISABLED)
+        self.cancel_button = ttk.Button(
+            controls, text="Cancel", command=self._cancel, state=tk.DISABLED
+        )
         self.cancel_button.grid(row=0, column=1, sticky="e")
         ttk.Progressbar(
             controls,
@@ -172,7 +258,9 @@ class MosaicApp(tk.Tk):
         log_actions = ttk.Frame(log_frame)
         log_actions.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
         log_actions.columnconfigure(0, weight=1)
-        ttk.Button(log_actions, text="Copy Log", command=self._copy_log).grid(row=0, column=1, sticky="e")
+        ttk.Button(log_actions, text="Copy Log", command=self._copy_log).grid(
+            row=0, column=1, sticky="e"
+        )
 
         self.log_text = tk.Text(log_frame, wrap="word", height=16, undo=False)
         self.log_text.grid(row=1, column=0, sticky="nsew")
@@ -182,6 +270,8 @@ class MosaicApp(tk.Tk):
         scrollbar = ttk.Scrollbar(log_frame, command=self.log_text.yview)
         scrollbar.grid(row=1, column=1, sticky="ns")
         self.log_text.configure(yscrollcommand=scrollbar.set)
+        self._on_mode_changed()
+        self.status_var.set("Select a video and Lada CLI to begin.")
 
     def _path_row(
         self,
@@ -190,10 +280,14 @@ class MosaicApp(tk.Tk):
         label: str,
         variable: tk.StringVar,
         command,
-    ) -> None:
-        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=(0, 10), pady=5)
-        ttk.Entry(parent, textvariable=variable).grid(row=row, column=1, sticky="ew", pady=5)
-        ttk.Button(parent, text="Browse", command=command).grid(row=row, column=2, sticky="ew", padx=(10, 0))
+    ) -> list[tk.Widget]:
+        text_label = ttk.Label(parent, text=label)
+        text_label.grid(row=row, column=0, sticky="w", padx=(0, 10), pady=5)
+        entry = ttk.Entry(parent, textvariable=variable)
+        entry.grid(row=row, column=1, sticky="ew", pady=5)
+        button = ttk.Button(parent, text="Browse", command=command)
+        button.grid(row=row, column=2, sticky="ew", padx=(10, 0))
+        return [text_label, entry, button]
 
     def _choose_input(self) -> None:
         path = filedialog.askopenfilename(
@@ -210,7 +304,7 @@ class MosaicApp(tk.Tk):
         if not self.output_dir_var.get():
             self.output_dir_var.set(str(input_path.parent))
         if not self.output_name_var.get():
-            self.output_name_var.set(default_output_path(input_path, input_path.parent).name)
+            self.output_name_var.set(self._default_output_path(input_path, input_path.parent).name)
 
     def _choose_output_dir(self) -> None:
         path = filedialog.askdirectory(title="Select output folder")
@@ -243,11 +337,23 @@ class MosaicApp(tk.Tk):
         try:
             settings = self._settings_from_form()
         except ValueError as exc:
-            self._append_log(f"Cannot start restoration: {exc}")
+            self._append_log(f"Cannot start processing: {exc}")
             messagebox.showwarning("Missing setting", str(exc))
             return
 
-        self._append_log("Queued restoration job.")
+        if isinstance(settings, LadaSettings) and not self._confirm_lada_setting_warnings(settings):
+            self.status_var.set("Start cancelled.")
+            return
+
+        task_name = "beauty filter" if isinstance(settings, BeautyFilterSettings) else "restoration"
+        if isinstance(settings, BeautyFilterSettings):
+            available, message = check_beauty_dependencies()
+            if not available:
+                self._append_log(message)
+                messagebox.showerror("Beauty filter dependency missing", message)
+                return
+
+        self._append_log(f"Queued {task_name} job.")
         self._append_log(f"Input: {settings.input_path}")
         self._append_log(f"Output: {settings.output_path}")
         self.status_var.set("Processing. Long videos can take a long time.")
@@ -256,19 +362,45 @@ class MosaicApp(tk.Tk):
         self.start_button.configure(state=tk.DISABLED)
         self.cancel_button.configure(state=tk.NORMAL)
 
-        self._process = RestorationProcess(
-            settings=settings,
-            on_log=lambda line: self._log_queue.put(("log", line)),
-            on_done=lambda code, output: self._log_queue.put(("done", (code, output))),
-        )
+        if isinstance(settings, BeautyFilterSettings):
+            self._process = BeautyFilterProcess(
+                settings=settings,
+                on_log=lambda line: self._log_queue.put(("log", line)),
+                on_done=lambda code, output: self._log_queue.put(("done", (code, output))),
+            )
+        else:
+            self._process = RestorationProcess(
+                settings=settings,
+                on_log=lambda line: self._log_queue.put(("log", line)),
+                on_done=lambda code, output: self._log_queue.put(("done", (code, output))),
+            )
         try:
             self._process.start()
         except Exception as exc:
-            self._append_log(f"Failed to start restoration: {exc}")
+            self._append_log(f"Failed to start processing: {exc}")
             self.status_var.set("Stopped or failed. Check the log.")
             self.start_button.configure(state=tk.NORMAL)
             self.cancel_button.configure(state=tk.DISABLED)
             messagebox.showerror("mosaic", f"Failed to start processing.\n\n{exc}")
+
+    def _confirm_lada_setting_warnings(self, settings: LadaSettings) -> bool:
+        warnings: list[str] = []
+        if settings.fp16 is True and settings.device not in {"cuda", "xpu"}:
+            warnings.append(
+                "Force FP16 only applies when Device is explicitly set to cuda or xpu. "
+                f"Current Device is {settings.device}, so --fp16 will not be sent to Lada."
+            )
+
+        if not warnings:
+            return True
+
+        message = "\n\n".join(warnings)
+        for line in message.splitlines():
+            self._append_log(f"Configuration warning: {line}")
+        return messagebox.askyesno(
+            "Configuration warning",
+            f"{message}\n\nContinue with FP16 disabled for this run?",
+        )
 
     def _cancel(self) -> None:
         if self._process:
@@ -276,24 +408,17 @@ class MosaicApp(tk.Tk):
             self.cancel_button.configure(state=tk.DISABLED)
             self.status_var.set("Stopping...")
 
-    def _settings_from_form(self) -> LadaSettings:
-        input_path = Path(self.input_var.get()).expanduser()
-        output_dir = Path(self.output_dir_var.get()).expanduser()
-        output_name = self.output_name_var.get().strip()
-        if not input_path.is_file():
-            raise ValueError("Select a valid input video.")
-        if not output_dir:
-            raise ValueError("Select an output folder.")
-        if not output_name:
-            raise ValueError("Set an output file name.")
-        if not output_name.lower().endswith((".mp4", ".mkv", ".mov")):
-            output_name += ".mp4"
+    def _settings_from_form(self) -> LadaSettings | BeautyFilterSettings:
+        if self.process_mode_var.get() == "beauty":
+            return self._beauty_settings_from_form()
+        return self._lada_settings_from_form()
 
+    def _lada_settings_from_form(self) -> LadaSettings:
+        input_path, output_dir, output_path = self._common_paths_from_form()
         preset = QUALITY_PRESETS[self.quality_var.get()]
         detection_model = self.detection_model_var.get()
         if detection_model == "preset":
             detection_model = str(preset["detection_model"])
-        output_path = output_dir / output_name
         return LadaSettings(
             lada_cli_path=_optional_path(self.lada_cli_var.get()),
             input_path=input_path,
@@ -308,6 +433,67 @@ class MosaicApp(tk.Tk):
             fp16=True if self.fp16_var.get() else None,
             mp4_fast_start=self.fast_start_var.get(),
         )
+
+    def _beauty_settings_from_form(self) -> BeautyFilterSettings:
+        input_path, output_dir, output_path = self._common_paths_from_form()
+        return BeautyFilterSettings(
+            input_path=input_path,
+            output_path=output_path,
+            temporary_directory=output_dir / ".mosaic-temp",
+            strength=int(self.beauty_strength_var.get()),
+            preserve_audio=self.beauty_preserve_audio_var.get(),
+        )
+
+    def _common_paths_from_form(self) -> tuple[Path, Path, Path]:
+        input_path = Path(self.input_var.get()).expanduser()
+        output_dir = Path(self.output_dir_var.get()).expanduser()
+        output_name = self.output_name_var.get().strip()
+        if not input_path.is_file():
+            raise ValueError("Select a valid input video.")
+        if not output_dir:
+            raise ValueError("Select an output folder.")
+        if not output_name:
+            raise ValueError("Set an output file name.")
+        if not output_name.lower().endswith((".mp4", ".mkv", ".mov")):
+            output_name += ".mp4"
+        return input_path, output_dir, output_dir / output_name
+
+    def _default_output_path(self, input_path: Path, output_dir: Path) -> Path:
+        if self.process_mode_var.get() == "beauty":
+            return default_beauty_output_path(input_path, output_dir)
+        return default_output_path(input_path, output_dir)
+
+    def _on_mode_changed(self) -> None:
+        input_value = self.input_var.get().strip()
+        output_dir_value = self.output_dir_var.get().strip()
+        if input_value and output_dir_value:
+            input_path = Path(input_value)
+            output_dir = Path(output_dir_value)
+            current_name = self.output_name_var.get().strip()
+            restore_name = default_output_path(input_path, output_dir).name
+            beauty_name = default_beauty_output_path(input_path, output_dir).name
+            if current_name in {"", restore_name, beauty_name}:
+                self.output_name_var.set(self._default_output_path(input_path, output_dir).name)
+        if self.process_mode_var.get() == "beauty":
+            self._set_widgets_enabled(self._restore_widgets, False)
+            self._set_widgets_enabled(self._beauty_widgets, True)
+            self.status_var.set("Beauty whitening uses OpenCV and writes a local output video.")
+        else:
+            self._set_widgets_enabled(self._restore_widgets, True)
+            self._set_widgets_enabled(self._beauty_widgets, False)
+            self.status_var.set("Mosaic restoration uses the configured Lada CLI.")
+
+    def _set_widgets_enabled(self, widgets: list[tk.Widget], enabled: bool) -> None:
+        for widget in widgets:
+            try:
+                key = str(widget)
+                if enabled:
+                    widget.configure(state=self._widget_states.pop(key, tk.NORMAL))
+                else:
+                    self._widget_states.setdefault(key, str(widget.cget("state")))
+                    widget.configure(state=tk.DISABLED)
+            except tk.TclError:
+                pass
 
     def _drain_log_queue(self) -> None:
         try:

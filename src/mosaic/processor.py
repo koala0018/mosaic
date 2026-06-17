@@ -102,8 +102,9 @@ class RestorationProcess:
         prepared = settings
         if settings.fp16 is True and settings.device not in {"cuda", "xpu"}:
             self._emit_log(
-                "Force FP16 is only safe with an explicit CUDA/XPU device. "
-                "Ignoring FP16 for this run."
+                "Configuration warning: Force FP16 only applies when Device is explicitly "
+                f"set to cuda or xpu. Current Device is {settings.device}, so --fp16 "
+                "will not be sent to Lada."
             )
             prepared = replace(prepared, fp16=None)
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from .beauty_filter import BeautyFilterProcess, BeautyFilterSettings, default_beauty_output_path
 from .lada_engine import LadaSettings, default_output_path, find_lada_cli, run_lada_probe
 from .processor import RestorationProcess
 
@@ -55,9 +56,42 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("basicvsrpp-v1.2", "deepmosaics"),
         default="basicvsrpp-v1.2",
     )
-    process.add_argument("--detect-face-mosaics", action=argparse.BooleanOptionalAction, default=None)
-    process.add_argument("--temporary-directory", type=Path, default=None, help="Temporary directory.")
+    process.add_argument(
+        "--detect-face-mosaics",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    process.add_argument(
+        "--temporary-directory",
+        type=Path,
+        default=None,
+        help="Temporary directory.",
+    )
     process.set_defaults(handler=handle_process)
+
+    beautify = subparsers.add_parser("beautify", help="Apply an OpenCV skin whitening filter.")
+    beautify.add_argument("input", type=Path, help="Input video path.")
+    beautify.add_argument("--output", type=Path, default=None, help="Output video path.")
+    beautify.add_argument("--output-dir", type=Path, default=None, help="Output directory.")
+    beautify.add_argument(
+        "--temporary-directory",
+        type=Path,
+        default=None,
+        help="Temporary directory.",
+    )
+    beautify.add_argument(
+        "--strength",
+        type=int,
+        default=55,
+        help="Whitening strength from 10 to 100. Default: 55.",
+    )
+    beautify.add_argument(
+        "--preserve-audio",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Remux the original audio track with ffmpeg when available.",
+    )
+    beautify.set_defaults(handler=handle_beautify)
 
     info = subparsers.add_parser("lada-info", help="Check the configured Lada CLI.")
     info.add_argument("--lada-cli", type=Path, default=None, help="Path to lada-cli.exe.")
@@ -119,6 +153,27 @@ def handle_process(args: argparse.Namespace) -> int:
         return_code = code
 
     process = RestorationProcess(settings, on_log=print, on_done=on_done)
+    process.run_blocking()
+    return return_code
+
+
+def handle_beautify(args: argparse.Namespace) -> int:
+    output_dir = args.output_dir or args.input.parent
+    output = args.output or default_beauty_output_path(args.input, output_dir)
+    settings = BeautyFilterSettings(
+        input_path=args.input,
+        output_path=output,
+        temporary_directory=args.temporary_directory or output.parent / ".mosaic-temp",
+        strength=max(10, min(100, int(args.strength))),
+        preserve_audio=args.preserve_audio,
+    )
+    return_code = 1
+
+    def on_done(code: int, _output_path: Path) -> None:
+        nonlocal return_code
+        return_code = code
+
+    process = BeautyFilterProcess(settings, on_log=print, on_done=on_done)
     process.run_blocking()
     return return_code
 

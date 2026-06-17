@@ -28,12 +28,15 @@ if (-not (Test-Path (Join-Path $ladaSource "lada-cli.exe"))) {
 
 python -m pip install --upgrade pip
 python -m pip install pyinstaller
+python -m pip install -e ($projectRoot + "[beauty]")
 python -m PyInstaller `
   --noconfirm `
   --windowed `
   --name mosaic `
   --paths (Join-Path $projectRoot "src") `
   --collect-submodules mosaic `
+  --collect-all cv2 `
+  --collect-submodules numpy `
   (Join-Path $projectRoot "src\mosaic\app.py")
 
 if (Test-Path $bundleRoot) {

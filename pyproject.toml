@@ -12,7 +12,11 @@ license = { text = "MIT" }
 authors = [
   { name = "koala", email = "1403019363@qq.com" }
 ]
-dependencies = []
+[project.optional-dependencies]
+beauty = [
+  "numpy>=1.26",
+  "opencv-python>=4.9",
+]
 
 [project.scripts]
 mosaic = "mosaic.cli:main"
