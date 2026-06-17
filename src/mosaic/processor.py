@@ -14,6 +14,7 @@ from typing import Callable
 
 from .lada_engine import LadaSettings, build_lada_command
 from .text_encoding import decode_process_output
+from .video_analyzer import analyze_restoration
 
 LogCallback = Callable[[str], None]
 DoneCallback = Callable[[int, Path], None]
@@ -79,6 +80,7 @@ class RestorationProcess:
                 self.on_log("Restoration was cancelled.")
             elif returncode == 0:
                 self.on_log(f"Finished: {self.settings.output_path}")
+                self._analyze_successful_output()
             else:
                 self.on_log(f"Lada exited with code {returncode}.")
             self.on_done(returncode, self.settings.output_path)
@@ -87,6 +89,32 @@ class RestorationProcess:
             self.on_done(1, self.settings.output_path)
         finally:
             self._process = None
+
+    def _analyze_successful_output(self) -> None:
+        self._emit_log("Analyzing output difference...")
+        try:
+            analysis = analyze_restoration(
+                self.settings.input_path,
+                self.settings.output_path,
+                self.settings.temporary_directory,
+                self.settings.lada_cli_path,
+            )
+        except Exception as exc:
+            self._emit_log(f"Output analysis failed: {exc}")
+            return
+
+        if analysis is None:
+            self._emit_log("Output analysis skipped: ffmpeg/ffprobe or readable frames were not available.")
+            return
+
+        self._emit_log(
+            "Output difference: "
+            f"mean_abs_diff={analysis.mean_abs_diff:.3f}, "
+            f"changed_ratio={analysis.mean_changed_ratio:.2%}, "
+            f"max_sample_diff={analysis.max_abs_diff:.3f}"
+        )
+        self._emit_log(analysis.conclusion)
+        self._emit_log(f"Analysis report: {self.settings.temporary_directory / 'mosaic-analysis.json'}")
 
     def _run_once(self, settings: LadaSettings) -> int:
         self._recent_output: list[str] = []
@@ -174,7 +202,14 @@ def _quote_arg(value: str) -> str:
 
 def _read_output_lines(stream, output_queue: queue.Queue[str]) -> None:
     for line in stream:
-        output_queue.put(decode_process_output(line).rstrip())
+        text = decode_process_output(line)
+        parts = text.replace("\r", "\n").splitlines()
+        if not parts:
+            continue
+        for part in parts:
+            clean = part.rstrip()
+            if clean:
+                output_queue.put(clean)
 
 
 def _should_retry_on_cpu(settings: LadaSettings, output_lines: list[str]) -> bool:

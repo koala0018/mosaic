@@ -45,6 +45,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     process.add_argument("--device", default="auto", help="Lada device, e.g. auto, cuda, cpu, xpu.")
     process.add_argument("--fp16", action=argparse.BooleanOptionalAction, default=None)
+    process.add_argument(
+        "--detection-model",
+        choices=("preset", "v4-fast", "v4-accurate", "v2"),
+        default="preset",
+    )
+    process.add_argument(
+        "--restoration-model",
+        choices=("basicvsrpp-v1.2", "deepmosaics"),
+        default="basicvsrpp-v1.2",
+    )
+    process.add_argument("--detect-face-mosaics", action=argparse.BooleanOptionalAction, default=None)
     process.add_argument("--temporary-directory", type=Path, default=None, help="Temporary directory.")
     process.set_defaults(handler=handle_process)
 
@@ -85,6 +96,9 @@ def handle_process(args: argparse.Namespace) -> int:
     output_dir = args.output_dir or args.input.parent
     output = args.output or default_output_path(args.input, output_dir)
     preset = _quality_preset(args.quality)
+    detection_model = args.detection_model
+    if detection_model == "preset":
+        detection_model = str(preset["detection_model"])
     settings = LadaSettings(
         lada_cli_path=args.lada_cli,
         input_path=args.input,
@@ -93,7 +107,9 @@ def handle_process(args: argparse.Namespace) -> int:
         device=args.device,
         encoding_preset=preset["encoding_preset"],
         max_clip_length=int(preset["max_clip_length"]),
-        detection_model=preset["detection_model"],
+        detection_model=detection_model,
+        restoration_model=args.restoration_model,
+        detect_face_mosaics=args.detect_face_mosaics,
         fp16=args.fp16,
     )
     return_code = 1

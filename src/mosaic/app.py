@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import queue
+import re
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -36,6 +38,9 @@ QUALITY_PRESETS = {
     },
 }
 
+DETECTION_MODELS = ("preset", "v4-fast", "v4-accurate", "v2")
+RESTORATION_MODELS = ("basicvsrpp-v1.2", "deepmosaics")
+
 
 class MosaicApp(tk.Tk):
     def __init__(self) -> None:
@@ -50,12 +55,18 @@ class MosaicApp(tk.Tk):
         self.lada_cli_var = tk.StringVar(value=str(find_lada_cli() or ""))
         self.device_var = tk.StringVar(value="auto")
         self.quality_var = tk.StringVar(value="balanced")
+        self.detection_model_var = tk.StringVar(value="preset")
+        self.restoration_model_var = tk.StringVar(value="basicvsrpp-v1.2")
+        self.detect_face_mosaics_var = tk.BooleanVar(value=False)
         self.fp16_var = tk.BooleanVar(value=False)
         self.fast_start_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="Select a video and Lada CLI to begin.")
+        self.progress_var = tk.StringVar(value="")
+        self.progress_value_var = tk.DoubleVar(value=0)
 
         self._log_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self._process: RestorationProcess | None = None
+        self._last_progress_log_at = 0.0
 
         self._build_ui()
         self.after(120, self._drain_log_queue)
@@ -115,12 +126,45 @@ class MosaicApp(tk.Tk):
         self.start_button = ttk.Button(options, text="Start", command=self._start)
         self.start_button.grid(row=1, column=5, sticky="ew")
 
+        ttk.Label(options, text="Detection").grid(row=2, column=0, sticky="w", pady=(10, 0))
+        ttk.Combobox(
+            options,
+            textvariable=self.detection_model_var,
+            values=DETECTION_MODELS,
+            state="readonly",
+            width=14,
+        ).grid(row=3, column=0, sticky="ew", padx=(0, 10))
+
+        ttk.Label(options, text="Restoration").grid(row=2, column=1, sticky="w", pady=(10, 0))
+        ttk.Combobox(
+            options,
+            textvariable=self.restoration_model_var,
+            values=RESTORATION_MODELS,
+            state="readonly",
+            width=18,
+        ).grid(row=3, column=1, sticky="ew", padx=(0, 10))
+
+        ttk.Checkbutton(
+            options,
+            text="Detect face mosaics",
+            variable=self.detect_face_mosaics_var,
+        ).grid(row=3, column=2, columnspan=2, sticky="w", padx=(0, 10))
+
         controls = ttk.Frame(root)
         controls.grid(row=3, column=0, sticky="ew", pady=(0, 8))
         controls.columnconfigure(0, weight=1)
         ttk.Label(controls, textvariable=self.status_var).grid(row=0, column=0, sticky="w")
         self.cancel_button = ttk.Button(controls, text="Cancel", command=self._cancel, state=tk.DISABLED)
         self.cancel_button.grid(row=0, column=1, sticky="e")
+        ttk.Progressbar(
+            controls,
+            variable=self.progress_value_var,
+            maximum=100,
+            mode="determinate",
+        ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 2))
+        ttk.Label(controls, textvariable=self.progress_var).grid(
+            row=2, column=0, columnspan=2, sticky="w"
+        )
 
         log_frame = ttk.LabelFrame(root, text="Log", padding=8)
         log_frame.grid(row=4, column=0, sticky="nsew")
@@ -195,6 +239,9 @@ class MosaicApp(tk.Tk):
         self._append_log(f"Input: {settings.input_path}")
         self._append_log(f"Output: {settings.output_path}")
         self.status_var.set("Processing. Long videos can take a long time.")
+        self.progress_var.set("")
+        self.progress_value_var.set(0)
+        self._last_progress_log_at = 0.0
         self.start_button.configure(state=tk.DISABLED)
         self.cancel_button.configure(state=tk.NORMAL)
 
@@ -225,6 +272,9 @@ class MosaicApp(tk.Tk):
             output_name += ".mp4"
 
         preset = QUALITY_PRESETS[self.quality_var.get()]
+        detection_model = self.detection_model_var.get()
+        if detection_model == "preset":
+            detection_model = str(preset["detection_model"])
         output_path = output_dir / output_name
         return LadaSettings(
             lada_cli_path=_optional_path(self.lada_cli_var.get()),
@@ -234,7 +284,9 @@ class MosaicApp(tk.Tk):
             device=self.device_var.get().strip() or "auto",
             encoding_preset=preset["encoding_preset"],
             max_clip_length=int(preset["max_clip_length"]),
-            detection_model=preset["detection_model"],
+            detection_model=detection_model,
+            restoration_model=self.restoration_model_var.get(),
+            detect_face_mosaics=True if self.detect_face_mosaics_var.get() else None,
             fp16=True if self.fp16_var.get() else None,
             mp4_fast_start=self.fast_start_var.get(),
         )
@@ -244,13 +296,26 @@ class MosaicApp(tk.Tk):
             while True:
                 kind, payload = self._log_queue.get_nowait()
                 if kind == "log":
-                    self._append_log(str(payload))
+                    self._route_log_line(str(payload))
                 elif kind == "done":
                     code, output = payload
                     self._on_done(int(code), Path(output))
         except queue.Empty:
             pass
         self.after(120, self._drain_log_queue)
+
+    def _route_log_line(self, line: str) -> None:
+        if _is_progress_line(line):
+            self.progress_var.set(_compact_progress_line(line))
+            percent = _extract_percent(line)
+            if percent is not None:
+                self.progress_value_var.set(percent)
+            now = time.monotonic()
+            if now - self._last_progress_log_at >= 5:
+                self._append_log(_compact_progress_line(line))
+                self._last_progress_log_at = now
+            return
+        self._append_log(line)
 
     def _append_log(self, line: str) -> None:
         self.log_text.configure(state=tk.NORMAL)
@@ -263,6 +328,7 @@ class MosaicApp(tk.Tk):
         self.cancel_button.configure(state=tk.DISABLED)
         if code == 0:
             self.status_var.set("Done.")
+            self.progress_value_var.set(100)
             messagebox.showinfo("mosaic", f"Finished processing.\n\n{output_path}")
         else:
             self.status_var.set("Stopped or failed. Check the log.")
@@ -272,6 +338,21 @@ class MosaicApp(tk.Tk):
 def _optional_path(value: str) -> Path | None:
     value = value.strip()
     return Path(value) if value else None
+
+
+def _is_progress_line(line: str) -> bool:
+    return "%|" in line or line.startswith("正在处理视频")
+
+
+def _compact_progress_line(line: str) -> str:
+    return " ".join(line.replace("\r", " ").split())
+
+
+def _extract_percent(line: str) -> float | None:
+    match = re.search(r"(\d{1,3})%\|", line)
+    if not match:
+        return None
+    return max(0.0, min(100.0, float(match.group(1))))
 
 
 def main() -> None:

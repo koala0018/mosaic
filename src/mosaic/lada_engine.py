@@ -25,6 +25,7 @@ class LadaSettings:
     max_clip_length: int = 180
     detection_model: str = "v4-fast"
     restoration_model: str = "basicvsrpp-v1.2"
+    detect_face_mosaics: bool | None = None
     fp16: bool | None = None
     mp4_fast_start: bool = False
 
@@ -72,6 +73,29 @@ def find_lada_cli(explicit_path: Path | None = None) -> Path | None:
     return None
 
 
+def find_lada_tool(tool_name: str, lada_cli_path: Path | None = None) -> Path | None:
+    lada_cli = find_lada_cli(lada_cli_path)
+    candidates: list[Path] = []
+    if lada_cli:
+        lada_root = lada_cli.parent
+        candidates.extend(
+            [
+                lada_root / "_internal" / "bin" / tool_name,
+                lada_root / "_internal" / tool_name,
+                lada_root / tool_name,
+            ]
+        )
+
+    found = shutil.which(tool_name)
+    if found:
+        candidates.append(Path(found))
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    return None
+
+
 def sys_executable_dir() -> str:
     import sys
 
@@ -113,6 +137,10 @@ def build_lada_command(settings: LadaSettings) -> list[str]:
         command.append("--no-fp16")
     if settings.mp4_fast_start:
         command.append("--mp4-fast-start")
+    if settings.detect_face_mosaics is True:
+        command.append("--detect-face-mosaics")
+    elif settings.detect_face_mosaics is False:
+        command.append("--no-detect-face-mosaics")
 
     return command
 
