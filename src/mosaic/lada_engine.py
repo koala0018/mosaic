@@ -131,7 +131,7 @@ def build_lada_command(settings: LadaSettings) -> list[str]:
         command.extend(["--device", settings.device])
     if settings.encoding_preset != "auto":
         command.extend(["--encoding-preset", settings.encoding_preset])
-    if settings.fp16 is True:
+    if settings.fp16 is True and settings.device in {"cuda", "xpu"}:
         command.append("--fp16")
     elif settings.fp16 is False:
         command.append("--no-fp16")

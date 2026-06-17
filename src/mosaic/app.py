@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import queue
 import re
-import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -66,7 +65,6 @@ class MosaicApp(tk.Tk):
 
         self._log_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self._process: RestorationProcess | None = None
-        self._last_progress_log_at = 0.0
 
         self._build_ui()
         self.after(120, self._drain_log_queue)
@@ -168,13 +166,21 @@ class MosaicApp(tk.Tk):
 
         log_frame = ttk.LabelFrame(root, text="Log", padding=8)
         log_frame.grid(row=4, column=0, sticky="nsew")
-        log_frame.rowconfigure(0, weight=1)
+        log_frame.rowconfigure(1, weight=1)
         log_frame.columnconfigure(0, weight=1)
 
-        self.log_text = tk.Text(log_frame, wrap="word", height=16, state=tk.DISABLED)
-        self.log_text.grid(row=0, column=0, sticky="nsew")
+        log_actions = ttk.Frame(log_frame)
+        log_actions.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        log_actions.columnconfigure(0, weight=1)
+        ttk.Button(log_actions, text="Copy Log", command=self._copy_log).grid(row=0, column=1, sticky="e")
+
+        self.log_text = tk.Text(log_frame, wrap="word", height=16, undo=False)
+        self.log_text.grid(row=1, column=0, sticky="nsew")
+        self.log_text.bind("<KeyPress>", self._block_log_edit)
+        self.log_text.bind("<Control-a>", self._select_all_log)
+        self.log_text.bind("<Control-A>", self._select_all_log)
         scrollbar = ttk.Scrollbar(log_frame, command=self.log_text.yview)
-        scrollbar.grid(row=0, column=1, sticky="ns")
+        scrollbar.grid(row=1, column=1, sticky="ns")
         self.log_text.configure(yscrollcommand=scrollbar.set)
 
     def _path_row(
@@ -220,18 +226,24 @@ class MosaicApp(tk.Tk):
             self.lada_cli_var.set(path)
 
     def _check_lada(self) -> None:
+        self._append_log("Checking Lada CLI...")
         try:
             result = run_lada_probe(_optional_path(self.lada_cli_var.get()), "--version")
         except Exception as exc:
+            self._append_log(f"Lada check failed: {exc}")
             messagebox.showerror("Lada check failed", str(exc))
             return
         output = (result.stdout + result.stderr).strip() or f"Exit code: {result.returncode}"
+        self._append_log(f"Lada check exit code: {result.returncode}")
+        for line in output.splitlines():
+            self._append_log(line)
         messagebox.showinfo("Lada", output)
 
     def _start(self) -> None:
         try:
             settings = self._settings_from_form()
         except ValueError as exc:
+            self._append_log(f"Cannot start restoration: {exc}")
             messagebox.showwarning("Missing setting", str(exc))
             return
 
@@ -241,7 +253,6 @@ class MosaicApp(tk.Tk):
         self.status_var.set("Processing. Long videos can take a long time.")
         self.progress_var.set("")
         self.progress_value_var.set(0)
-        self._last_progress_log_at = 0.0
         self.start_button.configure(state=tk.DISABLED)
         self.cancel_button.configure(state=tk.NORMAL)
 
@@ -250,7 +261,14 @@ class MosaicApp(tk.Tk):
             on_log=lambda line: self._log_queue.put(("log", line)),
             on_done=lambda code, output: self._log_queue.put(("done", (code, output))),
         )
-        self._process.start()
+        try:
+            self._process.start()
+        except Exception as exc:
+            self._append_log(f"Failed to start restoration: {exc}")
+            self.status_var.set("Stopped or failed. Check the log.")
+            self.start_button.configure(state=tk.NORMAL)
+            self.cancel_button.configure(state=tk.DISABLED)
+            messagebox.showerror("mosaic", f"Failed to start processing.\n\n{exc}")
 
     def _cancel(self) -> None:
         if self._process:
@@ -306,22 +324,35 @@ class MosaicApp(tk.Tk):
 
     def _route_log_line(self, line: str) -> None:
         if _is_progress_line(line):
-            self.progress_var.set(_compact_progress_line(line))
+            compact_line = _compact_progress_line(line)
+            self.progress_var.set(compact_line)
             percent = _extract_percent(line)
             if percent is not None:
                 self.progress_value_var.set(percent)
-            now = time.monotonic()
-            if now - self._last_progress_log_at >= 5:
-                self._append_log(_compact_progress_line(line))
-                self._last_progress_log_at = now
+            self._append_log(compact_line)
             return
         self._append_log(line)
 
     def _append_log(self, line: str) -> None:
-        self.log_text.configure(state=tk.NORMAL)
         self.log_text.insert(tk.END, line + "\n")
         self.log_text.see(tk.END)
-        self.log_text.configure(state=tk.DISABLED)
+
+    def _copy_log(self) -> None:
+        log_text = self.log_text.get("1.0", tk.END).strip()
+        self.clipboard_clear()
+        self.clipboard_append(log_text)
+        self.status_var.set("Log copied to clipboard.")
+
+    def _select_all_log(self, _event: tk.Event) -> str:
+        self.log_text.tag_add(tk.SEL, "1.0", tk.END)
+        self.log_text.mark_set(tk.INSERT, "1.0")
+        self.log_text.see(tk.INSERT)
+        return "break"
+
+    def _block_log_edit(self, event: tk.Event) -> str | None:
+        if event.state & 0x4 and event.keysym.lower() in {"a", "c"}:
+            return None
+        return "break"
 
     def _on_done(self, code: int, output_path: Path) -> None:
         self.start_button.configure(state=tk.NORMAL)
@@ -341,7 +372,12 @@ def _optional_path(value: str) -> Path | None:
 
 
 def _is_progress_line(line: str) -> bool:
-    return "%|" in line or line.startswith("正在处理视频")
+    return (
+        "%|" in line
+        or line.startswith("正在处理视频")
+        or line.startswith("姝ｅ湪澶勭悊瑙嗛")
+        or line.lower().startswith("processing video")
+    )
 
 
 def _compact_progress_line(line: str) -> str:
