@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import threading
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -122,13 +124,32 @@ class BeautyFilterProcess:
             f"strength={self.settings.strength}, preserve_audio={self.settings.preserve_audio}"
         )
 
-        face_detector = _load_face_detector(cv2)
-        if face_detector is None:
+        detector_available = _load_face_detector(cv2) is not None
+        if not detector_available:
             self._emit_log(
                 "OpenCV Haar face detector was not available; using skin color mask only."
             )
         else:
             self._emit_log("OpenCV Haar face detector loaded for adaptive skin masking.")
+
+        worker_count = _beauty_worker_count(width, height)
+        previous_cv_threads = cv2.getNumThreads()
+        cv2.setNumThreads(1)
+        self._emit_log(
+            f"Parallel frame processing: workers={worker_count}, ordered output enabled."
+        )
+        worker_state = threading.local()
+
+        def process_frame(frame):
+            if not hasattr(worker_state, "face_detector"):
+                worker_state.face_detector = _load_face_detector(cv2)
+            return _beautify_frame(
+                cv2,
+                np,
+                frame,
+                worker_state.face_detector,
+                strength,
+            )
 
         temp_video = self.settings.temporary_directory / f"{output_path.stem}.beauty-video.mp4"
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -144,31 +165,45 @@ class BeautyFilterProcess:
         strength = max(0.0, min(1.0, self.settings.strength / 100.0))
 
         try:
-            while True:
-                if self._cancelled:
-                    return 130
-                ok, frame = cap.read()
-                if not ok:
-                    break
+            with ThreadPoolExecutor(
+                max_workers=worker_count,
+                thread_name_prefix="beauty-frame",
+            ) as executor:
+                reached_end = False
+                while not reached_end:
+                    if self._cancelled:
+                        return 130
+                    frames = []
+                    for _ in range(worker_count):
+                        ok, frame = cap.read()
+                        if not ok:
+                            reached_end = True
+                            break
+                        frames.append(frame)
+                    if not frames:
+                        break
 
-                filtered = _beautify_frame(cv2, np, frame, face_detector, strength)
-                writer.write(filtered)
-                processed += 1
+                    for filtered in executor.map(process_frame, frames):
+                        if self._cancelled:
+                            return 130
+                        writer.write(filtered)
+                        processed += 1
 
-                if frame_count > 0:
-                    percent = int(processed * 100 / frame_count)
-                    if percent != last_percent:
-                        last_percent = percent
-                        self._emit_progress(percent, processed, frame_count, started_at)
-                elif processed % 30 == 0:
-                    elapsed = max(0.001, time.monotonic() - started_at)
-                    self._emit_log(
-                        f"Processing video frame {processed}; "
-                        f"speed={processed / elapsed:.2f} fps"
-                    )
+                        if frame_count > 0:
+                            percent = int(processed * 100 / frame_count)
+                            if percent != last_percent:
+                                last_percent = percent
+                                self._emit_progress(percent, processed, frame_count, started_at)
+                        elif processed % 30 == 0:
+                            elapsed = max(0.001, time.monotonic() - started_at)
+                            self._emit_log(
+                                f"Processing video frame {processed}; "
+                                f"speed={processed / elapsed:.2f} fps"
+                            )
         finally:
             cap.release()
             writer.release()
+            cv2.setNumThreads(previous_cv_threads)
 
         if processed == 0:
             self._emit_log("No frames were decoded from the input video.")
@@ -276,6 +311,17 @@ def _load_face_detector(cv2):
     if detector.empty():
         return None
     return detector
+
+
+def _beauty_worker_count(width: int, height: int, logical_cpus: int | None = None) -> int:
+    logical_cpus = logical_cpus or os.cpu_count() or 4
+    available = max(1, logical_cpus // 2)
+    pixels = width * height
+    if pixels >= 3840 * 2160:
+        return min(4, available)
+    if pixels >= 1920 * 1080:
+        return min(6, available)
+    return min(8, available)
 
 
 def _beautify_frame(cv2, np, frame, face_detector, strength: float):

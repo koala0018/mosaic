@@ -77,10 +77,11 @@ Benefits:
 
 `best`:
 
-- detection: `v4`
+- detection: `v4-accurate`
 - restoration: `basicvsrpp-v1.2`
-- encode preset: `h264-cpu-uhq`
+- encode preset: `hevc-nvidia-gpu-uhq` on NVIDIA, with `h264-cpu-uhq` fallback
 - max clip length: `240`
+- inference precision: FP32 by default
 
 ## Long Video Risks
 

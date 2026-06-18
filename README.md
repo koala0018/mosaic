@@ -159,15 +159,16 @@ mosaic-app
 
 打开应用后：
 
-1. 选择要处理的视频文件。
+1. 点击 `Add videos`，一次选择多个视频，或多次点击继续追加；重复文件会自动去重。
 2. 选择输出目录。
 3. 选择任务模式：
    - `Restore mosaic`：马赛克修复，默认模式。
    - `Beauty whitening`：OpenCV 美白滤镜。
 4. 如果选择 `Restore mosaic`，需要选择 `lada-cli.exe`，然后选择质量和设备。
 5. 如果选择 `Beauty whitening`，设置 `Beauty intensity`，建议先使用默认值 `55`。
-6. 点击 `Start` 开始处理。
-7. 等待完成弹窗，最终视频会保存到你指定的位置。
+6. 点击 `Start queue` 开始处理。
+7. 在任务队列查看每个视频的状态和进度，在下方执行日志查看当前视频的完整日志。
+8. 当前视频完成后会自动输出并继续下一个，最终视频会保存到你指定的位置。
 
 ## 使用美白滤镜
 
@@ -181,7 +182,7 @@ mosaic-app
 mosaic app
 ```
 
-2. 点击 `Video` 选择本地视频。
+2. 点击 `Add videos` 选择一个或多个本地视频。
 3. 选择 `Output folder`。
 4. 在 `Task` 中选择 `Beauty whitening`。
 5. 设置 `Output name`，默认会使用类似 `input.beauty.mp4` 的文件名。
@@ -190,8 +191,8 @@ mosaic app
    - `50` 到 `65`：推荐范围，适合大多数人像视频。
    - `70` 以上：效果更明显，但可能出现偏白或妆容变淡。
 7. 保持 `Preserve original audio` 勾选，可尽量保留原视频音轨。
-8. 点击 `Start`。
-9. 处理过程中可以查看进度条和日志，也可以点击 `Cancel` 取消。
+8. 点击 `Start queue`。
+9. 处理过程中可以同时查看任务进度和执行日志，也可以点击 `Cancel queue` 取消。
 
 完成后输出视频会写入你选择的输出目录。如果找不到 FFmpeg，程序会在日志中提示，并输出无音轨视频。
 

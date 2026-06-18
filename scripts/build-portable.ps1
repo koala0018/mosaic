@@ -6,7 +6,9 @@ param(
 
   [switch]$Offline,
 
-  [switch]$SkipLadaDownload
+  [switch]$SkipLadaDownload,
+
+  [switch]$SkipArchive
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,8 +29,11 @@ if (-not (Test-Path (Join-Path $ladaSource "lada-cli.exe"))) {
 }
 
 python -m pip install --upgrade pip
+if ($LASTEXITCODE -ne 0) { throw "Failed to update pip (exit code $LASTEXITCODE)." }
 python -m pip install pyinstaller
+if ($LASTEXITCODE -ne 0) { throw "Failed to install PyInstaller (exit code $LASTEXITCODE)." }
 python -m pip install -e ($projectRoot + "[beauty]")
+if ($LASTEXITCODE -ne 0) { throw "Failed to install mosaic dependencies (exit code $LASTEXITCODE)." }
 python -m PyInstaller `
   --noconfirm `
   --windowed `
@@ -38,6 +43,7 @@ python -m PyInstaller `
   --collect-all cv2 `
   --collect-submodules numpy `
   (Join-Path $projectRoot "src\mosaic\app.py")
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed (exit code $LASTEXITCODE)." }
 
 if (Test-Path $bundleRoot) {
   Remove-Item -LiteralPath $bundleRoot -Recurse -Force
@@ -64,25 +70,27 @@ To install into the current user profile:
 Lada is bundled in the lada directory. The app will auto-detect lada\lada-cli.exe.
 "@ | Set-Content -Path $readmePath -Encoding UTF8
 
-$zipPath = Join-Path $distRoot "mosaic-portable-$LadaVariant.zip"
-if (Test-Path $zipPath) {
-  Remove-Item -LiteralPath $zipPath -Force
-}
-
-$tar = Get-Command "tar.exe" -ErrorAction SilentlyContinue
-if ($tar) {
-  Write-Host "Creating portable zip with tar.exe"
-  & $tar.Source -a -cf $zipPath -C $bundleRoot .
-  if ($LASTEXITCODE -ne 0) {
-    throw "tar.exe failed to create portable zip with exit code $LASTEXITCODE."
+if (-not $SkipArchive) {
+  $zipPath = Join-Path $distRoot "mosaic-portable-$LadaVariant.zip"
+  if (Test-Path $zipPath) {
+    Remove-Item -LiteralPath $zipPath -Force
   }
-} else {
-  Write-Host "Creating portable zip with Compress-Archive"
-  Compress-Archive -Path (Join-Path $bundleRoot "*") -DestinationPath $zipPath -Force
-}
 
-$genericZipPath = Join-Path $distRoot "mosaic-portable.zip"
-Copy-Item -Path $zipPath -Destination $genericZipPath -Force
+  $tar = Get-Command "tar.exe" -ErrorAction SilentlyContinue
+  if ($tar) {
+    Write-Host "Creating portable zip with tar.exe"
+    & $tar.Source -a -cf $zipPath -C $bundleRoot .
+    if ($LASTEXITCODE -ne 0) {
+      throw "tar.exe failed to create portable zip with exit code $LASTEXITCODE."
+    }
+  } else {
+    Write-Host "Creating portable zip with Compress-Archive"
+    Compress-Archive -Path (Join-Path $bundleRoot "*") -DestinationPath $zipPath -Force
+  }
+
+  $genericZipPath = Join-Path $distRoot "mosaic-portable.zip"
+  Copy-Item -Path $zipPath -Destination $genericZipPath -Force
+  Write-Host "Portable zip: $zipPath"
+}
 
 Write-Host "Portable bundle: $bundleRoot"
-Write-Host "Portable zip: $zipPath"

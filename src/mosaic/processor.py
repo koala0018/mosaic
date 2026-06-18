@@ -79,7 +79,7 @@ class RestorationProcess:
             returncode = self._run_once(active_settings)
             if returncode != 0 and _should_retry_on_cpu(active_settings, self._recent_output):
                 self._emit_log("CUDA is not available or the NVIDIA driver is too old. Retrying on CPU...")
-                cpu_settings = replace(active_settings, device="cpu", fp16=False)
+                cpu_settings = _settings_for_cpu(active_settings)
                 returncode = self._run_once(cpu_settings)
             if self._cancelled and returncode != 0:
                 self._emit_log("Restoration was cancelled.")
@@ -128,7 +128,7 @@ class RestorationProcess:
                 "CUDA preflight warning detected. Switching this run from auto to CPU "
                 "and disabling FP16 to avoid a stalled CUDA fallback path."
             )
-            return replace(prepared, device="cpu", fp16=False)
+            return _settings_for_cpu(prepared)
 
         return prepared
 
@@ -359,6 +359,17 @@ def _should_retry_on_cpu(settings: LadaSettings, output_lines: list[str]) -> boo
         return False
     text = "\n".join(output_lines).lower()
     return _contains_cuda_problem(text)
+
+
+def _settings_for_cpu(settings: LadaSettings) -> LadaSettings:
+    encoding_preset = settings.encoding_preset
+    if "nvidia-gpu" in encoding_preset:
+        encoding_preset = (
+            "h264-cpu-uhq"
+            if encoding_preset.endswith(("-hq", "-uhq"))
+            else "h264-cpu-fast"
+        )
+    return replace(settings, device="cpu", fp16=False, encoding_preset=encoding_preset)
 
 
 def _contains_cuda_problem(text: str) -> bool:

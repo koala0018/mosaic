@@ -5,6 +5,7 @@ from __future__ import annotations
 import queue
 import re
 import tkinter as tk
+from dataclasses import dataclass
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -43,7 +44,7 @@ QUALITY_PRESETS = {
     },
     "best": {
         "label": "Best",
-        "encoding_preset": "h264-cpu-uhq",
+        "encoding_preset": "hevc-nvidia-gpu-uhq",
         "max_clip_length": 240,
         "detection_model": "v4-accurate",
     },
@@ -53,19 +54,27 @@ DETECTION_MODELS = ("preset", "v4-fast", "v4-accurate", "v2")
 RESTORATION_MODELS = ("basicvsrpp-v1.2", "deepmosaics")
 
 
+@dataclass
+class BatchJob:
+    settings: LadaSettings | BeautyFilterSettings
+    tree_id: str
+    status: str = "Waiting"
+    progress: float = 0.0
+
+
 class MosaicApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("mosaic - Lada video restoration")
-        self.geometry("860x640")
-        self.minsize(760, 560)
+        self.geometry("980x780")
+        self.minsize(820, 680)
 
         self.input_var = tk.StringVar()
         self.output_dir_var = tk.StringVar()
         self.output_name_var = tk.StringVar()
         self.process_mode_var = tk.StringVar(value="restore")
         self.lada_cli_var = tk.StringVar(value=str(find_lada_cli() or ""))
-        self.device_var = tk.StringVar(value="auto")
+        self.device_var = tk.StringVar(value="cuda")
         self.quality_var = tk.StringVar(value="balanced")
         self.detection_model_var = tk.StringVar(value="preset")
         self.restoration_model_var = tk.StringVar(value="basicvsrpp-v1.2")
@@ -80,6 +89,13 @@ class MosaicApp(tk.Tk):
 
         self._log_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self._process: RestorationProcess | BeautyFilterProcess | None = None
+        self._selected_inputs: list[Path] = []
+        self._batch_jobs: list[BatchJob] = []
+        self._current_job_index = -1
+        self._batch_cancelled = False
+        self._completed_jobs = 0
+        self._failed_jobs = 0
+        self._tree_input_paths: dict[str, Path] = {}
         self._restore_widgets: list[tk.Widget] = []
         self._beauty_widgets: list[tk.Widget] = []
         self._widget_states: dict[str, str] = {}
@@ -91,7 +107,7 @@ class MosaicApp(tk.Tk):
         root = ttk.Frame(self, padding=18)
         root.pack(fill=tk.BOTH, expand=True)
         root.columnconfigure(0, weight=1)
-        root.rowconfigure(4, weight=1)
+        root.rowconfigure(3, weight=1)
 
         title = ttk.Label(root, text="Long video mosaic restoration", font=("Segoe UI", 16, "bold"))
         title.grid(row=0, column=0, sticky="w", pady=(0, 14))
@@ -100,13 +116,18 @@ class MosaicApp(tk.Tk):
         file_frame.grid(row=1, column=0, sticky="ew", pady=(0, 12))
         file_frame.columnconfigure(1, weight=1)
 
-        self._path_row(file_frame, 0, "Video", self.input_var, self._choose_input)
+        self._path_row(
+            file_frame, 0, "Videos", self.input_var, self._choose_input, button_text="Add videos"
+        )
+        ttk.Button(file_frame, text="Clear", command=self._clear_inputs).grid(
+            row=0, column=3, sticky="ew", padx=(8, 0)
+        )
         self._path_row(file_frame, 1, "Output folder", self.output_dir_var, self._choose_output_dir)
         self._restore_widgets.extend(
             self._path_row(file_frame, 2, "Lada CLI", self.lada_cli_var, self._choose_lada_cli)
         )
 
-        ttk.Label(file_frame, text="Output name").grid(
+        ttk.Label(file_frame, text="Output name (single video)").grid(
             row=3, column=0, sticky="w", padx=(0, 10), pady=5
         )
         ttk.Entry(file_frame, textvariable=self.output_name_var).grid(
@@ -157,13 +178,15 @@ class MosaicApp(tk.Tk):
         )
         device.grid(row=1, column=1, sticky="ew", padx=(0, 10))
 
-        fp16 = ttk.Checkbutton(options, text="Force FP16", variable=self.fp16_var)
+        fp16 = ttk.Checkbutton(
+            options, text="FP16 (faster, slight quality loss)", variable=self.fp16_var
+        )
         fp16.grid(row=1, column=2, sticky="w", padx=(0, 10))
         fast_start = ttk.Checkbutton(options, text="MP4 fast start", variable=self.fast_start_var)
         fast_start.grid(row=1, column=3, sticky="w", padx=(0, 10))
         check_lada = ttk.Button(options, text="Check Lada", command=self._check_lada)
         check_lada.grid(row=1, column=4, sticky="ew", padx=(0, 10))
-        self.start_button = ttk.Button(options, text="Start", command=self._start)
+        self.start_button = ttk.Button(options, text="Start queue", command=self._start)
         self.start_button.grid(row=1, column=5, sticky="ew")
 
         detection_label = ttk.Label(options, text="Detection")
@@ -232,12 +255,47 @@ class MosaicApp(tk.Tk):
         preserve_audio.grid(row=5, column=3, columnspan=3, sticky="w", padx=(0, 10))
         self._beauty_widgets.extend([beauty_label, beauty_strength, beauty_value, preserve_audio])
 
+        work_pane = ttk.Panedwindow(root, orient=tk.VERTICAL)
+        work_pane.grid(row=3, column=0, sticky="nsew", pady=(0, 10))
+
+        queue_frame = ttk.LabelFrame(work_pane, text="Task queue", padding=8)
+        queue_frame.columnconfigure(0, weight=1)
+        queue_frame.rowconfigure(1, weight=1)
+        queue_actions = ttk.Frame(queue_frame)
+        queue_actions.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        queue_actions.columnconfigure(0, weight=1)
+        ttk.Button(
+            queue_actions, text="Remove selected", command=self._remove_selected_inputs
+        ).grid(row=0, column=1, padx=(0, 8))
+        ttk.Button(queue_actions, text="Clear queue", command=self._clear_inputs).grid(
+            row=0, column=2
+        )
+        self.task_tree = ttk.Treeview(
+            queue_frame,
+            columns=("file", "status", "progress", "output"),
+            show="headings",
+            height=5,
+        )
+        self.task_tree.heading("file", text="Video")
+        self.task_tree.heading("status", text="Status")
+        self.task_tree.heading("progress", text="Progress")
+        self.task_tree.heading("output", text="Output")
+        self.task_tree.column("file", width=220, minwidth=140)
+        self.task_tree.column("status", width=90, minwidth=80, anchor=tk.CENTER)
+        self.task_tree.column("progress", width=90, minwidth=75, anchor=tk.CENTER)
+        self.task_tree.column("output", width=390, minwidth=180)
+        self.task_tree.grid(row=1, column=0, sticky="nsew")
+        queue_scrollbar = ttk.Scrollbar(queue_frame, command=self.task_tree.yview)
+        queue_scrollbar.grid(row=1, column=1, sticky="ns")
+        self.task_tree.configure(yscrollcommand=queue_scrollbar.set)
+        work_pane.add(queue_frame, weight=1)
+
         controls = ttk.Frame(root)
-        controls.grid(row=3, column=0, sticky="ew", pady=(0, 8))
+        controls.grid(row=4, column=0, sticky="ew", pady=(0, 8))
         controls.columnconfigure(0, weight=1)
         ttk.Label(controls, textvariable=self.status_var).grid(row=0, column=0, sticky="w")
         self.cancel_button = ttk.Button(
-            controls, text="Cancel", command=self._cancel, state=tk.DISABLED
+            controls, text="Cancel queue", command=self._cancel, state=tk.DISABLED
         )
         self.cancel_button.grid(row=0, column=1, sticky="e")
         ttk.Progressbar(
@@ -250,8 +308,7 @@ class MosaicApp(tk.Tk):
             row=2, column=0, columnspan=2, sticky="w"
         )
 
-        log_frame = ttk.LabelFrame(root, text="Log", padding=8)
-        log_frame.grid(row=4, column=0, sticky="nsew")
+        log_frame = ttk.LabelFrame(work_pane, text="Execution log", padding=8)
         log_frame.rowconfigure(1, weight=1)
         log_frame.columnconfigure(0, weight=1)
 
@@ -262,7 +319,7 @@ class MosaicApp(tk.Tk):
             row=0, column=1, sticky="e"
         )
 
-        self.log_text = tk.Text(log_frame, wrap="word", height=16, undo=False)
+        self.log_text = tk.Text(log_frame, wrap="word", height=8, undo=False)
         self.log_text.grid(row=1, column=0, sticky="nsew")
         self.log_text.bind("<KeyPress>", self._block_log_edit)
         self.log_text.bind("<Control-a>", self._select_all_log)
@@ -270,6 +327,7 @@ class MosaicApp(tk.Tk):
         scrollbar = ttk.Scrollbar(log_frame, command=self.log_text.yview)
         scrollbar.grid(row=1, column=1, sticky="ns")
         self.log_text.configure(yscrollcommand=scrollbar.set)
+        work_pane.add(log_frame, weight=2)
         self._on_mode_changed()
         self.status_var.set("Select a video and Lada CLI to begin.")
 
@@ -280,36 +338,90 @@ class MosaicApp(tk.Tk):
         label: str,
         variable: tk.StringVar,
         command,
+        button_text: str = "Browse",
     ) -> list[tk.Widget]:
         text_label = ttk.Label(parent, text=label)
         text_label.grid(row=row, column=0, sticky="w", padx=(0, 10), pady=5)
         entry = ttk.Entry(parent, textvariable=variable)
         entry.grid(row=row, column=1, sticky="ew", pady=5)
-        button = ttk.Button(parent, text="Browse", command=command)
+        button = ttk.Button(parent, text=button_text, command=command)
         button.grid(row=row, column=2, sticky="ew", padx=(10, 0))
         return [text_label, entry, button]
 
     def _choose_input(self) -> None:
-        path = filedialog.askopenfilename(
-            title="Select video",
+        if self._process and self._process.is_running:
+            messagebox.showinfo("mosaic", "The current queue is still processing.")
+            return
+        paths = filedialog.askopenfilenames(
+            title="Select videos",
             filetypes=[
                 ("Video files", "*.mp4 *.mkv *.mov *.avi *.webm"),
                 ("All files", "*.*"),
             ],
         )
-        if not path:
+        if not paths:
             return
-        input_path = Path(path)
-        self.input_var.set(str(input_path))
+        self._selected_inputs = _append_unique_paths(
+            self._selected_inputs, [Path(path) for path in paths]
+        )
+        input_path = self._selected_inputs[0]
+        if len(self._selected_inputs) == 1:
+            self.input_var.set(str(input_path))
+        else:
+            self.input_var.set(f"{len(self._selected_inputs)} videos selected")
         if not self.output_dir_var.get():
             self.output_dir_var.set(str(input_path.parent))
-        if not self.output_name_var.get():
+        if len(self._selected_inputs) == 1:
             self.output_name_var.set(self._default_output_path(input_path, input_path.parent).name)
+        else:
+            self.output_name_var.set("")
+        self._preview_selected_jobs()
+
+    def _remove_selected_inputs(self) -> None:
+        if self._process and self._process.is_running:
+            messagebox.showinfo("mosaic", "The current queue is still processing.")
+            return
+        selected_paths = {
+            self._tree_input_paths[item_id]
+            for item_id in self.task_tree.selection()
+            if item_id in self._tree_input_paths
+        }
+        if not selected_paths:
+            return
+        self._selected_inputs = [
+            path for path in self._selected_inputs if path not in selected_paths
+        ]
+        self._sync_input_summary()
+        self._preview_selected_jobs()
+
+    def _clear_inputs(self) -> None:
+        if self._process and self._process.is_running:
+            messagebox.showinfo("mosaic", "The current queue is still processing.")
+            return
+        self._selected_inputs = []
+        self.input_var.set("")
+        self.output_name_var.set("")
+        self._preview_selected_jobs()
+
+    def _sync_input_summary(self) -> None:
+        if not self._selected_inputs:
+            self.input_var.set("")
+            self.output_name_var.set("")
+        elif len(self._selected_inputs) == 1:
+            input_path = self._selected_inputs[0]
+            self.input_var.set(str(input_path))
+            if self.output_dir_var.get().strip():
+                output_dir = Path(self.output_dir_var.get()).expanduser()
+                self.output_name_var.set(self._default_output_path(input_path, output_dir).name)
+        else:
+            self.input_var.set(f"{len(self._selected_inputs)} videos selected")
+            self.output_name_var.set("")
 
     def _choose_output_dir(self) -> None:
         path = filedialog.askdirectory(title="Select output folder")
         if path:
             self.output_dir_var.set(path)
+            self._preview_selected_jobs()
 
     def _choose_lada_cli(self) -> None:
         path = filedialog.askopenfilename(
@@ -335,53 +447,85 @@ class MosaicApp(tk.Tk):
 
     def _start(self) -> None:
         try:
-            settings = self._settings_from_form()
+            settings_list = self._settings_list_from_form()
         except ValueError as exc:
             self._append_log(f"Cannot start processing: {exc}")
             messagebox.showwarning("Missing setting", str(exc))
             return
 
-        if isinstance(settings, LadaSettings) and not self._confirm_lada_setting_warnings(settings):
+        first_settings = settings_list[0]
+        if isinstance(first_settings, LadaSettings) and not self._confirm_lada_setting_warnings(
+            first_settings
+        ):
             self.status_var.set("Start cancelled.")
             return
 
-        task_name = "beauty filter" if isinstance(settings, BeautyFilterSettings) else "restoration"
-        if isinstance(settings, BeautyFilterSettings):
+        task_name = (
+            "beauty filter" if isinstance(first_settings, BeautyFilterSettings) else "restoration"
+        )
+        if isinstance(first_settings, BeautyFilterSettings):
             available, message = check_beauty_dependencies()
             if not available:
                 self._append_log(message)
                 messagebox.showerror("Beauty filter dependency missing", message)
                 return
 
-        self._append_log(f"Queued {task_name} job.")
-        self._append_log(f"Input: {settings.input_path}")
-        self._append_log(f"Output: {settings.output_path}")
-        self.status_var.set("Processing. Long videos can take a long time.")
+        self._batch_jobs = []
+        self.task_tree.delete(*self.task_tree.get_children())
+        self._tree_input_paths.clear()
+        for index, settings in enumerate(settings_list, start=1):
+            tree_id = self.task_tree.insert(
+                "",
+                tk.END,
+                values=(settings.input_path.name, "Waiting", "0%", str(settings.output_path)),
+            )
+            self._tree_input_paths[tree_id] = settings.input_path
+            self._batch_jobs.append(BatchJob(settings=settings, tree_id=tree_id))
+            self._append_log(
+                f"Queued {task_name} job {index}/{len(settings_list)}: {settings.input_path}"
+            )
+        self._current_job_index = -1
+        self._batch_cancelled = False
+        self._completed_jobs = 0
+        self._failed_jobs = 0
+        self.status_var.set(f"Queue ready: {len(self._batch_jobs)} video(s).")
         self.progress_var.set("")
         self.progress_value_var.set(0)
         self.start_button.configure(state=tk.DISABLED)
         self.cancel_button.configure(state=tk.NORMAL)
 
-        if isinstance(settings, BeautyFilterSettings):
-            self._process = BeautyFilterProcess(
-                settings=settings,
-                on_log=lambda line: self._log_queue.put(("log", line)),
-                on_done=lambda code, output: self._log_queue.put(("done", (code, output))),
-            )
+        self._start_next_job()
+
+    def _start_next_job(self) -> None:
+        if self._batch_cancelled:
+            self._finish_batch()
+            return
+        self._current_job_index += 1
+        if self._current_job_index >= len(self._batch_jobs):
+            self._finish_batch()
+            return
+
+        job = self._batch_jobs[self._current_job_index]
+        job.status = "Processing"
+        self._update_job_row(job)
+        position = self._current_job_index + 1
+        total = len(self._batch_jobs)
+        self.status_var.set(f"Processing {position}/{total}: {job.settings.input_path.name}")
+        self.progress_var.set(f"Current video 0% | Overall {self._overall_percent():.0f}%")
+        self._append_log(f"Starting job {position}/{total}: {job.settings.input_path}")
+        self._append_log(f"Output: {job.settings.output_path}")
+
+        callback = lambda code, output: self._log_queue.put(("done", (code, output)))
+        log_callback = lambda line: self._log_queue.put(("log", line))
+        if isinstance(job.settings, BeautyFilterSettings):
+            self._process = BeautyFilterProcess(job.settings, log_callback, callback)
         else:
-            self._process = RestorationProcess(
-                settings=settings,
-                on_log=lambda line: self._log_queue.put(("log", line)),
-                on_done=lambda code, output: self._log_queue.put(("done", (code, output))),
-            )
+            self._process = RestorationProcess(job.settings, log_callback, callback)
         try:
             self._process.start()
         except Exception as exc:
-            self._append_log(f"Failed to start processing: {exc}")
-            self.status_var.set("Stopped or failed. Check the log.")
-            self.start_button.configure(state=tk.NORMAL)
-            self.cancel_button.configure(state=tk.DISABLED)
-            messagebox.showerror("mosaic", f"Failed to start processing.\n\n{exc}")
+            self._append_log(f"Failed to start job: {exc}")
+            self._on_done(1, job.settings.output_path)
 
     def _confirm_lada_setting_warnings(self, settings: LadaSettings) -> bool:
         warnings: list[str] = []
@@ -403,15 +547,84 @@ class MosaicApp(tk.Tk):
         )
 
     def _cancel(self) -> None:
+        self._batch_cancelled = True
         if self._process:
             self._process.cancel()
-            self.cancel_button.configure(state=tk.DISABLED)
-            self.status_var.set("Stopping...")
+        for job in self._batch_jobs[self._current_job_index + 1 :]:
+            job.status = "Cancelled"
+            self._update_job_row(job)
+        self.cancel_button.configure(state=tk.DISABLED)
+        self.status_var.set("Stopping current task and cancelling queue...")
 
     def _settings_from_form(self) -> LadaSettings | BeautyFilterSettings:
         if self.process_mode_var.get() == "beauty":
             return self._beauty_settings_from_form()
         return self._lada_settings_from_form()
+
+    def _settings_list_from_form(self) -> list[LadaSettings | BeautyFilterSettings]:
+        inputs = self._input_paths_from_form()
+        output_dir_text = self.output_dir_var.get().strip()
+        if not output_dir_text:
+            raise ValueError("Select an output folder.")
+        output_dir = Path(output_dir_text).expanduser()
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        reserved: set[Path] = set()
+        settings_list: list[LadaSettings | BeautyFilterSettings] = []
+        for input_path in inputs:
+            if len(inputs) == 1 and self.output_name_var.get().strip():
+                output_name = self.output_name_var.get().strip()
+                if not output_name.lower().endswith((".mp4", ".mkv", ".mov")):
+                    output_name += ".mp4"
+                output_path = output_dir / output_name
+            else:
+                output_path = self._default_output_path(input_path, output_dir)
+                output_path = _available_output_path(output_path, reserved)
+            reserved.add(output_path.resolve())
+            settings_list.append(self._settings_for_paths(input_path, output_dir, output_path))
+        return settings_list
+
+    def _input_paths_from_form(self) -> list[Path]:
+        if self._selected_inputs:
+            inputs = self._selected_inputs
+        else:
+            value = self.input_var.get().strip()
+            inputs = [Path(value).expanduser()] if value else []
+        if not inputs or any(not path.is_file() for path in inputs):
+            raise ValueError("Select one or more valid input videos.")
+        return inputs
+
+    def _settings_for_paths(
+        self, input_path: Path, output_dir: Path, output_path: Path
+    ) -> LadaSettings | BeautyFilterSettings:
+        if self.process_mode_var.get() == "beauty":
+            return BeautyFilterSettings(
+                input_path=input_path,
+                output_path=output_path,
+                temporary_directory=output_dir / ".mosaic-temp",
+                strength=int(self.beauty_strength_var.get()),
+                preserve_audio=self.beauty_preserve_audio_var.get(),
+            )
+        preset = QUALITY_PRESETS[self.quality_var.get()]
+        detection_model = self.detection_model_var.get()
+        if detection_model == "preset":
+            detection_model = str(preset["detection_model"])
+        return LadaSettings(
+            lada_cli_path=_optional_path(self.lada_cli_var.get()),
+            input_path=input_path,
+            output_path=output_path,
+            temporary_directory=output_dir / ".mosaic-temp",
+            device=self.device_var.get().strip() or "auto",
+            encoding_preset=_encoding_preset_for_device(
+                str(preset["encoding_preset"]), self.device_var.get()
+            ),
+            max_clip_length=int(preset["max_clip_length"]),
+            detection_model=detection_model,
+            restoration_model=self.restoration_model_var.get(),
+            detect_face_mosaics=True if self.detect_face_mosaics_var.get() else None,
+            fp16=self.fp16_var.get(),
+            mp4_fast_start=self.fast_start_var.get(),
+        )
 
     def _lada_settings_from_form(self) -> LadaSettings:
         input_path, output_dir, output_path = self._common_paths_from_form()
@@ -425,12 +638,14 @@ class MosaicApp(tk.Tk):
             output_path=output_path,
             temporary_directory=output_dir / ".mosaic-temp",
             device=self.device_var.get().strip() or "auto",
-            encoding_preset=preset["encoding_preset"],
+            encoding_preset=_encoding_preset_for_device(
+                str(preset["encoding_preset"]), self.device_var.get()
+            ),
             max_clip_length=int(preset["max_clip_length"]),
             detection_model=detection_model,
             restoration_model=self.restoration_model_var.get(),
             detect_face_mosaics=True if self.detect_face_mosaics_var.get() else None,
-            fp16=True if self.fp16_var.get() else None,
+            fp16=self.fp16_var.get(),
             mp4_fast_start=self.fast_start_var.get(),
         )
 
@@ -466,7 +681,15 @@ class MosaicApp(tk.Tk):
     def _on_mode_changed(self) -> None:
         input_value = self.input_var.get().strip()
         output_dir_value = self.output_dir_var.get().strip()
-        if input_value and output_dir_value:
+        if len(self._selected_inputs) == 1 and output_dir_value:
+            input_path = self._selected_inputs[0]
+            output_dir = Path(output_dir_value)
+            current_name = self.output_name_var.get().strip()
+            restore_name = default_output_path(input_path, output_dir).name
+            beauty_name = default_beauty_output_path(input_path, output_dir).name
+            if current_name in {"", restore_name, beauty_name}:
+                self.output_name_var.set(self._default_output_path(input_path, output_dir).name)
+        elif not self._selected_inputs and input_value and output_dir_value:
             input_path = Path(input_value)
             output_dir = Path(output_dir_value)
             current_name = self.output_name_var.get().strip()
@@ -482,6 +705,7 @@ class MosaicApp(tk.Tk):
             self._set_widgets_enabled(self._restore_widgets, True)
             self._set_widgets_enabled(self._beauty_widgets, False)
             self.status_var.set("Mosaic restoration uses the configured Lada CLI.")
+        self._preview_selected_jobs()
 
     def _set_widgets_enabled(self, widgets: list[tk.Widget], enabled: bool) -> None:
         for widget in widgets:
@@ -514,7 +738,13 @@ class MosaicApp(tk.Tk):
             self.progress_var.set(compact_line)
             percent = _extract_percent(line)
             if percent is not None:
-                self.progress_value_var.set(percent)
+                if 0 <= self._current_job_index < len(self._batch_jobs):
+                    job = self._batch_jobs[self._current_job_index]
+                    job.progress = percent
+                    self._update_job_row(job)
+                overall = self._overall_percent()
+                self.progress_value_var.set(overall)
+                self.progress_var.set(f"Current video {percent:.0f}% | Overall {overall:.0f}%")
             self._append_log(compact_line)
             return
         self._append_log(line)
@@ -541,20 +771,105 @@ class MosaicApp(tk.Tk):
         return "break"
 
     def _on_done(self, code: int, output_path: Path) -> None:
+        if not (0 <= self._current_job_index < len(self._batch_jobs)):
+            return
+        job = self._batch_jobs[self._current_job_index]
+        if code == 0:
+            job.status = "Completed"
+            job.progress = 100
+            self._completed_jobs += 1
+            self._append_log(f"Completed job: {output_path}")
+        else:
+            job.status = "Cancelled" if self._batch_cancelled or code == 130 else "Failed"
+            if job.status == "Failed":
+                self._failed_jobs += 1
+            self._append_log(
+                f"Job {job.status.lower()} (exit code {code}): {job.settings.input_path}"
+            )
+        self._update_job_row(job)
+        self.progress_value_var.set(self._overall_percent())
+        self.after(150, self._start_next_job)
+
+    def _update_job_row(self, job: BatchJob) -> None:
+        self.task_tree.item(
+            job.tree_id,
+            values=(
+                job.settings.input_path.name,
+                job.status,
+                f"{job.progress:.0f}%",
+                str(job.settings.output_path),
+            ),
+        )
+        self.task_tree.see(job.tree_id)
+
+    def _overall_percent(self) -> float:
+        if not self._batch_jobs:
+            return 0.0
+        return sum(job.progress for job in self._batch_jobs) / len(self._batch_jobs)
+
+    def _finish_batch(self) -> None:
+        self._process = None
         self.start_button.configure(state=tk.NORMAL)
         self.cancel_button.configure(state=tk.DISABLED)
-        if code == 0:
-            self.status_var.set("Done.")
-            self.progress_value_var.set(100)
-            messagebox.showinfo("mosaic", f"Finished processing.\n\n{output_path}")
-        else:
-            self.status_var.set("Stopped or failed. Check the log.")
-            messagebox.showerror("mosaic", "Processing did not finish successfully. Check the log.")
+        total = len(self._batch_jobs)
+        cancelled = sum(job.status == "Cancelled" for job in self._batch_jobs)
+        summary = (
+            f"Queue finished: {self._completed_jobs} completed, "
+            f"{self._failed_jobs} failed, {cancelled} cancelled."
+        )
+        self.status_var.set(summary)
+        self.progress_var.set(summary)
+        self.progress_value_var.set(self._overall_percent())
+        self._append_log(summary)
+        if self._failed_jobs:
+            messagebox.showwarning("mosaic", summary + "\n\nCheck the log for failed tasks.")
+        elif self._batch_cancelled:
+            messagebox.showinfo("mosaic", summary)
+        elif total:
+            messagebox.showinfo("mosaic", summary)
+
+    def _preview_selected_jobs(self) -> None:
+        self.task_tree.delete(*self.task_tree.get_children())
+        self._tree_input_paths.clear()
+        output_dir_text = self.output_dir_var.get().strip()
+        output_dir = Path(output_dir_text) if output_dir_text else None
+        for path in self._selected_inputs:
+            output = self._default_output_path(path, output_dir) if output_dir else ""
+            tree_id = self.task_tree.insert(
+                "", tk.END, values=(path.name, "Ready", "0%", str(output))
+            )
+            self._tree_input_paths[tree_id] = path
 
 
 def _optional_path(value: str) -> Path | None:
     value = value.strip()
     return Path(value) if value else None
+
+
+def _available_output_path(path: Path, reserved: set[Path]) -> Path:
+    candidate = path
+    number = 2
+    while candidate.exists() or candidate.resolve() in reserved:
+        candidate = path.with_name(f"{path.stem}-{number}{path.suffix}")
+        number += 1
+    return candidate
+
+
+def _append_unique_paths(existing: list[Path], additions: list[Path]) -> list[Path]:
+    result = list(existing)
+    known = {path.resolve() for path in existing}
+    for path in additions:
+        resolved = path.resolve()
+        if resolved not in known:
+            known.add(resolved)
+            result.append(path)
+    return result
+
+
+def _encoding_preset_for_device(preset: str, device: str) -> str:
+    if device.strip().lower() == "cpu" and "nvidia-gpu" in preset:
+        return "h264-cpu-uhq" if preset.endswith(("-hq", "-uhq")) else "h264-cpu-fast"
+    return preset
 
 
 def _is_progress_line(line: str) -> bool:

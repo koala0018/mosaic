@@ -1,0 +1,21 @@
+{
+  "settings_version": "0.0.6",
+  "datasets_dir": "F:\\codexProjects\\datasets",
+  "weights_dir": "F:\\codexProjects\\mosiac\\weights",
+  "runs_dir": "F:\\codexProjects\\mosiac\\runs",
+  "uuid": "b107ffd6fe86610da9b4afaf77555774794ac96f69e16197b302a64f4f2112f7",
+  "sync": false,
+  "api_key": "",
+  "openai_api_key": "",
+  "clearml": true,
+  "comet": true,
+  "dvc": true,
+  "hub": true,
+  "mlflow": true,
+  "neptune": true,
+  "raytune": true,
+  "tensorboard": false,
+  "wandb": false,
+  "vscode_msg": true,
+  "openvino_msg": true
+}

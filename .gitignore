@@ -18,6 +18,7 @@ mosaic.spec
 .mypy_cache/
 .coverage
 htmlcov/
+Ultralytics/
 
 # Editors and OS
 .idea/

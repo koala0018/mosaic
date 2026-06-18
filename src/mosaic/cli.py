@@ -133,18 +133,23 @@ def handle_process(args: argparse.Namespace) -> int:
     detection_model = args.detection_model
     if detection_model == "preset":
         detection_model = str(preset["detection_model"])
+    fp16 = args.fp16
+    if args.quality == "best" and fp16 is None:
+        fp16 = False
     settings = LadaSettings(
         lada_cli_path=args.lada_cli,
         input_path=args.input,
         output_path=output,
         temporary_directory=args.temporary_directory or output.parent / ".mosaic-temp",
         device=args.device,
-        encoding_preset=preset["encoding_preset"],
+        encoding_preset=_encoding_preset_for_device(
+            str(preset["encoding_preset"]), args.device
+        ),
         max_clip_length=int(preset["max_clip_length"]),
         detection_model=detection_model,
         restoration_model=args.restoration_model,
         detect_face_mosaics=args.detect_face_mosaics,
-        fp16=args.fp16,
+        fp16=fp16,
     )
     return_code = 1
 
@@ -198,12 +203,18 @@ def _quality_preset(name: str) -> dict[str, str | int]:
             "detection_model": "v4-fast",
         },
         "best": {
-            "encoding_preset": "h264-cpu-uhq",
+            "encoding_preset": "hevc-nvidia-gpu-uhq",
             "max_clip_length": 240,
             "detection_model": "v4-accurate",
         },
     }
     return presets[name]
+
+
+def _encoding_preset_for_device(preset: str, device: str) -> str:
+    if device.strip().lower() == "cpu" and "nvidia-gpu" in preset:
+        return "h264-cpu-uhq" if preset.endswith(("-hq", "-uhq")) else "h264-cpu-fast"
+    return preset
 
 
 def main(argv: list[str] | None = None) -> int:
