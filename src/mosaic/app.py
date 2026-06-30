@@ -16,7 +16,13 @@ try:
         check_beauty_dependencies,
         default_beauty_output_path,
     )
-    from .lada_engine import LadaSettings, default_output_path, find_lada_cli, run_lada_probe
+    from .lada_engine import (
+        LadaSettings,
+        default_output_path,
+        find_lada_cli,
+        run_lada_probe,
+        supports_fp16_device,
+    )
     from .processor import RestorationProcess
 except ImportError:
     from mosaic.beauty_filter import (
@@ -25,28 +31,44 @@ except ImportError:
         check_beauty_dependencies,
         default_beauty_output_path,
     )
-    from mosaic.lada_engine import LadaSettings, default_output_path, find_lada_cli, run_lada_probe
+    from mosaic.lada_engine import (
+        LadaSettings,
+        default_output_path,
+        find_lada_cli,
+        run_lada_probe,
+        supports_fp16_device,
+    )
     from mosaic.processor import RestorationProcess
 
 
 QUALITY_PRESETS = {
     "fast": {
         "label": "Fast",
-        "encoding_preset": "h264-cpu-fast",
+        "encoding_preset": "h264-nvidia-gpu-fast",
         "max_clip_length": 120,
         "detection_model": "v4-fast",
+        "fp16": True,
     },
     "balanced": {
         "label": "Balanced",
-        "encoding_preset": "auto",
+        "encoding_preset": "hevc-nvidia-gpu-hq",
         "max_clip_length": 180,
         "detection_model": "v4-fast",
+        "fp16": True,
+    },
+    "accelerated": {
+        "label": "High quality accelerated",
+        "encoding_preset": "hevc-nvidia-gpu-uhq",
+        "max_clip_length": 180,
+        "detection_model": "v4-fast",
+        "fp16": True,
     },
     "best": {
         "label": "Best",
         "encoding_preset": "hevc-nvidia-gpu-uhq",
         "max_clip_length": 240,
         "detection_model": "v4-accurate",
+        "fp16": False,
     },
 }
 
@@ -74,12 +96,12 @@ class MosaicApp(tk.Tk):
         self.output_name_var = tk.StringVar()
         self.process_mode_var = tk.StringVar(value="restore")
         self.lada_cli_var = tk.StringVar(value=str(find_lada_cli() or ""))
-        self.device_var = tk.StringVar(value="cuda")
-        self.quality_var = tk.StringVar(value="balanced")
+        self.device_var = tk.StringVar(value="cuda:0")
+        self.quality_var = tk.StringVar(value="accelerated")
         self.detection_model_var = tk.StringVar(value="preset")
         self.restoration_model_var = tk.StringVar(value="basicvsrpp-v1.2")
         self.detect_face_mosaics_var = tk.BooleanVar(value=False)
-        self.fp16_var = tk.BooleanVar(value=False)
+        self.fp16_var = tk.BooleanVar(value=True)
         self.fast_start_var = tk.BooleanVar(value=False)
         self.beauty_strength_var = tk.IntVar(value=55)
         self.beauty_preserve_audio_var = tk.BooleanVar(value=True)
@@ -166,6 +188,7 @@ class MosaicApp(tk.Tk):
             state="readonly",
             width=12,
         )
+        quality.bind("<<ComboboxSelected>>", self._on_quality_changed)
         quality.grid(row=1, column=0, sticky="ew", padx=(0, 10))
 
         device_label = ttk.Label(options, text="Device")
@@ -173,7 +196,7 @@ class MosaicApp(tk.Tk):
         device = ttk.Combobox(
             options,
             textvariable=self.device_var,
-            values=("auto", "cuda", "xpu", "cpu"),
+            values=("auto", "cuda:0", "cuda", "xpu", "cpu"),
             width=12,
         )
         device.grid(row=1, column=1, sticky="ew", padx=(0, 10))
@@ -529,9 +552,9 @@ class MosaicApp(tk.Tk):
 
     def _confirm_lada_setting_warnings(self, settings: LadaSettings) -> bool:
         warnings: list[str] = []
-        if settings.fp16 is True and settings.device not in {"cuda", "xpu"}:
+        if settings.fp16 is True and not supports_fp16_device(settings.device):
             warnings.append(
-                "Force FP16 only applies when Device is explicitly set to cuda or xpu. "
+                "Force FP16 only applies when Device is auto, cuda, cuda:0, or xpu. "
                 f"Current Device is {settings.device}, so --fp16 will not be sent to Lada."
             )
 
@@ -545,6 +568,11 @@ class MosaicApp(tk.Tk):
             "Configuration warning",
             f"{message}\n\nContinue with FP16 disabled for this run?",
         )
+
+    def _on_quality_changed(self, _event: tk.Event | None = None) -> None:
+        preset = QUALITY_PRESETS[self.quality_var.get()]
+        self.fp16_var.set(bool(preset["fp16"]))
+        self._preview_selected_jobs()
 
     def _cancel(self) -> None:
         self._batch_cancelled = True

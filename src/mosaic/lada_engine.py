@@ -131,7 +131,7 @@ def build_lada_command(settings: LadaSettings) -> list[str]:
         command.extend(["--device", settings.device])
     if settings.encoding_preset != "auto":
         command.extend(["--encoding-preset", settings.encoding_preset])
-    if settings.fp16 is True and settings.device in {"cuda", "xpu"}:
+    if settings.fp16 is True and supports_fp16_device(settings.device):
         command.append("--fp16")
     elif settings.fp16 is False:
         command.append("--no-fp16")
@@ -143,6 +143,14 @@ def build_lada_command(settings: LadaSettings) -> list[str]:
         command.append("--no-detect-face-mosaics")
 
     return command
+
+
+def _device_family(device: str) -> str:
+    return device.strip().lower().split(":", 1)[0]
+
+
+def supports_fp16_device(device: str) -> bool:
+    return _device_family(device) in {"auto", "cuda", "xpu"}
 
 
 def run_lada_probe(lada_cli_path: Path | None, *args: str) -> subprocess.CompletedProcess[str]:

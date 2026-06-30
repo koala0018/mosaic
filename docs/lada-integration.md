@@ -42,17 +42,18 @@ lada-cli.exe `
   --fp16
 ```
 
-For the balanced preset, the app does not force `--encoding-preset`; Lada chooses its default for the machine.
+For the balanced preset, the app uses the NVIDIA HQ encoder on GPU devices and falls back to a CPU preset on CPU-only runs.
 
 ## Presets
 
 | mosaic preset | Lada settings |
 | --- | --- |
-| fast | `h264-cpu-fast`, `v4-fast`, `max-clip-length=120` |
-| balanced | Lada default encoder, `v4-fast`, `max-clip-length=180` |
-| best | `h264-cpu-uhq`, `v4`, `max-clip-length=240` |
+| fast | `h264-nvidia-gpu-fast`, `v4-fast`, `max-clip-length=120`, FP16 |
+| balanced | `hevc-nvidia-gpu-hq`, `v4-fast`, `max-clip-length=180`, FP16 |
+| accelerated | `hevc-nvidia-gpu-uhq`, `v4-fast`, `max-clip-length=180`, FP16 |
+| best | `hevc-nvidia-gpu-uhq`, `v4-accurate`, `max-clip-length=240`, FP32 |
 
-Higher `max-clip-length` can improve temporal stability but needs more memory. For weak GPUs or CPU-only machines, lower it.
+NVIDIA encoder presets fall back to CPU presets when the selected device is CPU. Higher `max-clip-length` can improve temporal stability but needs more memory. For weak GPUs or CPU-only machines, lower it.
 
 ## Windows App Responsibilities
 

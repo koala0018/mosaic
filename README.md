@@ -21,11 +21,12 @@
 - Windows 桌面应用，基于系统自带的 Tkinter。
 - 可选择输入视频、输出目录、输出文件名和 `lada-cli.exe`。
 - 支持质量预设：
-  - `fast`：速度优先，CPU 编码较快。
-  - `balanced`：平衡模式，让 Lada 根据当前机器选择默认编码策略。
-  - `best`：质量优先，使用 Lada 的高质量 CPU 编码预设，速度更慢。
-- 支持设备选择：`auto`、`cuda`、`xpu`、`cpu`。
-- 支持强制 FP16 选项，适合支持半精度加速的 GPU。
+  - `fast`：速度优先，使用 GPU 快速编码，CPU 设备会自动回退。
+  - `balanced`：平衡模式，使用 GPU 高质量编码和快速检测。
+  - `accelerated`：默认高质量加速模式，使用 GPU UHQ 编码、`v4-fast` 检测和 FP16。
+  - `best`：极致质量优先，使用 `v4-accurate`、GPU UHQ 编码和 FP32，速度更慢。
+- 支持设备选择：`auto`、`cuda:0`、`cuda`、`xpu`、`cpu`。
+- 支持 FP16 加速选项，适合支持半精度加速的 GPU。
 - 后台运行长视频处理任务，界面不会卡死。
 - 实时显示 Lada 日志。
 - 支持 OpenCV 美白滤镜，可调美白强度，并显示完整进度条和日志。
@@ -260,7 +261,7 @@ mosaic process input.mp4 --output-dir D:\Videos\Restored --quality balanced --de
 质量优先：
 
 ```powershell
-mosaic process input.mp4 --output D:\Videos\Restored\input.restored.mp4 --quality best --device cuda
+mosaic process input.mp4 --output D:\Videos\Restored\input.restored.mp4 --quality accelerated --device cuda:0
 ```
 
 CPU-only：

@@ -65,15 +65,25 @@ Benefits:
 
 - Lada detection model: `v4-fast`
 - Lada restoration model: `basicvsrpp-v1.2`
-- encode preset: `h264-cpu-fast`
+- encode preset: `h264-nvidia-gpu-fast` on NVIDIA, with `h264-cpu-fast` fallback
 - max clip length: `120`
+- inference precision: FP16 on CUDA/XPU
 
 `balanced`:
 
 - detection: `v4-fast`
 - restoration: `basicvsrpp-v1.2`
-- encode preset: Lada default for current machine
+- encode preset: `hevc-nvidia-gpu-hq` on NVIDIA, with `h264-cpu-uhq` fallback
 - max clip length: `180`
+- inference precision: FP16 on CUDA/XPU
+
+`accelerated`:
+
+- detection: `v4-fast`
+- restoration: `basicvsrpp-v1.2`
+- encode preset: `hevc-nvidia-gpu-uhq` on NVIDIA, with `h264-cpu-uhq` fallback
+- max clip length: `180`
+- inference precision: FP16 on CUDA/XPU
 
 `best`:
 

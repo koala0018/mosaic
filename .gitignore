@@ -19,6 +19,7 @@ mosaic.spec
 .coverage
 htmlcov/
 Ultralytics/
+.tmp/
 
 # Editors and OS
 .idea/

@@ -13,7 +13,12 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
-from .lada_engine import LadaSettings, build_lada_command, run_lada_probe
+from .lada_engine import (
+    LadaSettings,
+    build_lada_command,
+    run_lada_probe,
+    supports_fp16_device,
+)
 from .text_encoding import decode_process_output
 from .video_analyzer import analyze_restoration
 
@@ -100,13 +105,13 @@ class RestorationProcess:
 
     def _prepare_settings(self, settings: LadaSettings) -> LadaSettings:
         prepared = settings
-        if settings.fp16 is True and settings.device not in {"cuda", "xpu"}:
+        if settings.fp16 is True and not supports_fp16_device(settings.device):
             self._emit_log(
                 "Configuration warning: Force FP16 only applies when Device is explicitly "
-                f"set to cuda or xpu. Current Device is {settings.device}, so --fp16 "
+                f"set to auto, cuda, cuda:0, or xpu. Current Device is {settings.device}, so --fp16 "
                 "will not be sent to Lada."
             )
-            prepared = replace(prepared, fp16=None)
+            prepared = replace(prepared, fp16=False)
 
         if prepared.device != "auto":
             return prepared

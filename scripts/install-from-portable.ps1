@@ -1,6 +1,6 @@
 param(
   [string]$PortableDirectory = "dist\mosaic-portable",
-  [string]$InstallDir = "$env:LOCALAPPDATA\mosaic"
+  [string]$InstallDir = (Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "mosaic")
 )
 
 $ErrorActionPreference = "Stop"

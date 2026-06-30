@@ -48,11 +48,20 @@ class BatchQueueTests(unittest.TestCase):
 
         self.assertEqual(result, [first, second])
 
+    def test_accelerated_quality_uses_gpu_uhq_encoder_and_fp16(self) -> None:
+        preset = QUALITY_PRESETS["accelerated"]
+
+        self.assertEqual(preset["detection_model"], "v4-fast")
+        self.assertEqual(preset["encoding_preset"], "hevc-nvidia-gpu-uhq")
+        self.assertEqual(preset["max_clip_length"], 180)
+        self.assertTrue(preset["fp16"])
+
     def test_best_quality_uses_uhq_gpu_encoding_and_fp32(self) -> None:
         preset = QUALITY_PRESETS["best"]
 
         self.assertEqual(preset["detection_model"], "v4-accurate")
         self.assertEqual(preset["encoding_preset"], "hevc-nvidia-gpu-uhq")
+        self.assertFalse(preset["fp16"])
         self.assertEqual(
             _encoding_preset_for_device(str(preset["encoding_preset"]), "cpu"),
             "h264-cpu-uhq",
@@ -64,7 +73,7 @@ class BatchQueueTests(unittest.TestCase):
             input_path=Path("input.mp4"),
             output_path=Path("output.mp4"),
             temporary_directory=Path("temp"),
-            device="cuda",
+            device="cuda:0",
             encoding_preset="hevc-nvidia-gpu-uhq",
             fp16=None,
         )
@@ -75,14 +84,34 @@ class BatchQueueTests(unittest.TestCase):
         self.assertEqual(result.encoding_preset, "h264-cpu-uhq")
         self.assertFalse(result.fp16)
 
-    def test_high_quality_command_explicitly_disables_fp16(self) -> None:
+    def test_accelerated_command_enables_fp16_on_cuda_index_device(self) -> None:
         lada_cli = Path("vendor/lada/nvidia/lada-cli.exe").resolve()
         settings = LadaSettings(
             lada_cli_path=lada_cli,
             input_path=Path("input.mp4"),
             output_path=Path("output.mp4"),
             temporary_directory=Path("temp"),
-            device="cuda",
+            device="cuda:0",
+            encoding_preset="hevc-nvidia-gpu-uhq",
+            detection_model="v4-fast",
+            restoration_model="basicvsrpp-v1.2",
+            fp16=True,
+        )
+
+        command = build_lada_command(settings)
+
+        self.assertIn("--device", command)
+        self.assertIn("cuda:0", command)
+        self.assertIn("--fp16", command)
+
+    def test_best_quality_command_explicitly_disables_fp16(self) -> None:
+        lada_cli = Path("vendor/lada/nvidia/lada-cli.exe").resolve()
+        settings = LadaSettings(
+            lada_cli_path=lada_cli,
+            input_path=Path("input.mp4"),
+            output_path=Path("output.mp4"),
+            temporary_directory=Path("temp"),
+            device="cuda:0",
             encoding_preset="hevc-nvidia-gpu-uhq",
             detection_model="v4-accurate",
             restoration_model="basicvsrpp-v1.2",

@@ -27,8 +27,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     plan.add_argument(
         "--quality",
-        choices=("fast", "balanced", "best"),
-        default="balanced",
+        choices=("fast", "balanced", "accelerated", "best"),
+        default="accelerated",
         help="Processing preset.",
     )
     plan.set_defaults(handler=handle_plan)
@@ -40,11 +40,15 @@ def build_parser() -> argparse.ArgumentParser:
     process.add_argument("--lada-cli", type=Path, default=None, help="Path to lada-cli.exe.")
     process.add_argument(
         "--quality",
-        choices=("fast", "balanced", "best"),
-        default="balanced",
+        choices=("fast", "balanced", "accelerated", "best"),
+        default="accelerated",
         help="Processing preset.",
     )
-    process.add_argument("--device", default="auto", help="Lada device, e.g. auto, cuda, cpu, xpu.")
+    process.add_argument(
+        "--device",
+        default="cuda:0",
+        help="Lada device, e.g. auto, cuda:0, cuda, cpu, xpu.",
+    )
     process.add_argument("--fp16", action=argparse.BooleanOptionalAction, default=None)
     process.add_argument(
         "--detection-model",
@@ -133,9 +137,7 @@ def handle_process(args: argparse.Namespace) -> int:
     detection_model = args.detection_model
     if detection_model == "preset":
         detection_model = str(preset["detection_model"])
-    fp16 = args.fp16
-    if args.quality == "best" and fp16 is None:
-        fp16 = False
+    fp16 = args.fp16 if args.fp16 is not None else bool(preset["fp16"])
     settings = LadaSettings(
         lada_cli_path=args.lada_cli,
         input_path=args.input,
@@ -190,22 +192,31 @@ def handle_app(_args: argparse.Namespace) -> int:
     return 0
 
 
-def _quality_preset(name: str) -> dict[str, str | int]:
+def _quality_preset(name: str) -> dict[str, str | int | bool]:
     presets = {
         "fast": {
-            "encoding_preset": "h264-cpu-fast",
+            "encoding_preset": "h264-nvidia-gpu-fast",
             "max_clip_length": 120,
             "detection_model": "v4-fast",
+            "fp16": True,
         },
         "balanced": {
-            "encoding_preset": "auto",
+            "encoding_preset": "hevc-nvidia-gpu-hq",
             "max_clip_length": 180,
             "detection_model": "v4-fast",
+            "fp16": True,
+        },
+        "accelerated": {
+            "encoding_preset": "hevc-nvidia-gpu-uhq",
+            "max_clip_length": 180,
+            "detection_model": "v4-fast",
+            "fp16": True,
         },
         "best": {
             "encoding_preset": "hevc-nvidia-gpu-uhq",
             "max_clip_length": 240,
             "detection_model": "v4-accurate",
+            "fp16": False,
         },
     }
     return presets[name]
